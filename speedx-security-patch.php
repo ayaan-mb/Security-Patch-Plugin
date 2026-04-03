@@ -1,9 +1,10 @@
 <?php
 /**
- * Plugin Name: SpeedX Security Patch
+ * Plugin Name: Security Patch by Click Track Marketing
  * Description: Custom login URL changer and security patch manager for WordPress.
  * Version: 1.3.0
- * Author: SpeedX Marketing
+ * Author: Click Track Marketing
+ * Author URI: https://www.clicktrackmarketing.com/
  */
 
 if (!defined('ABSPATH')) {
@@ -299,7 +300,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 .speedx-security-wrap{
                     margin: 18px 20px 0 2px;
                     color:#d8ecff;
-                    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+                    font-family: Poppins, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
                 }
                 .speedx-security-wrap *, .speedx-security-wrap *:before, .speedx-security-wrap *:after{
                     box-sizing:border-box;

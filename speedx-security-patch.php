@@ -300,7 +300,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 .speedx-security-wrap{
                     margin: 18px 20px 0 2px;
                     color:#d8ecff;
-                    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+                    font-family: Poppins, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
                 }
                 .speedx-security-wrap *, .speedx-security-wrap *:before, .speedx-security-wrap *:after{
                     box-sizing:border-box;

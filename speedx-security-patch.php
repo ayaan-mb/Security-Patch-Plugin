@@ -1,6 +1,6 @@
 <?php
 /**
- * Plugin Name: Security Patch by Click Track Marketing
+ * Plugin Name: Security Patch By Click Track Marketing
  * Description: Custom login URL changer and security patch manager for WordPress.
  * Version: 1.3.0
  * Author: Click Track Marketing
@@ -16,6 +16,10 @@ if (!class_exists('SpeedX_Security_Patch')) {
         private $option_name = 'speedx_security_patch_settings';
         private $htaccess_marker = 'SpeedX Security Patch - wp-config Protection';
         private $lockout_minutes = 30;
+        private $file_monitor_hash_option = 'speedx_security_patch_file_monitor_hash';
+        private $file_monitor_snapshot_option = 'speedx_security_patch_file_monitor_snapshot';
+        private $file_monitor_log_option = 'speedx_security_patch_file_monitor_log';
+        private $file_monitor_notice_transient = 'speedx_security_patch_file_monitor_notice';
 
         public function __construct() {
             register_activation_hook(__FILE__, [$this, 'activate']);
@@ -23,6 +27,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
 
             add_action('admin_menu', [$this, 'admin_menu']);
             add_action('admin_init', [$this, 'register_settings']);
+            add_action('admin_init', [$this, 'maybe_detect_core_file_changes'], 20);
             add_action('admin_post_speedx_save_settings', [$this, 'save_settings']);
             add_action('admin_notices', [$this, 'admin_notices']);
 
@@ -52,6 +57,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 'custom_login_slug' => 'secure-login',
                 'protect_wp_config_htaccess' => 0,
                 'disallow_file_edit' => 0,
+                'core_file_change_alert' => 0,
                 'login_attempt_limit' => 'none',
                 'blocked_countries' => [],
             ];
@@ -71,6 +77,11 @@ if (!class_exists('SpeedX_Security_Patch')) {
             if (!empty($settings['disallow_file_edit'])) {
                 $this->remove_wp_config_rule();
             }
+
+            delete_transient($this->file_monitor_notice_transient);
+            delete_transient('speedx_security_patch_file_monitor_scan_lock');
+            delete_option($this->file_monitor_snapshot_option);
+            delete_option($this->file_monitor_hash_option);
         }
 
         private function get_settings() {
@@ -78,6 +89,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 'custom_login_slug' => 'secure-login',
                 'protect_wp_config_htaccess' => 0,
                 'disallow_file_edit' => 0,
+                'core_file_change_alert' => 0,
                 'login_attempt_limit' => 'none',
                 'blocked_countries' => [],
             ];
@@ -140,6 +152,13 @@ if (!class_exists('SpeedX_Security_Patch')) {
             $custom_login_url = home_url('/' . trim($settings['custom_login_slug'], '/') . '/');
             $countries = $this->get_country_list();
             $blocked_count = is_array($settings['blocked_countries']) ? count($settings['blocked_countries']) : 0;
+            $malicious_logs = get_option($this->file_monitor_log_option, []);
+            if (!is_array($malicious_logs)) {
+                $malicious_logs = [];
+            }
+            $uploaded_file_logs = array_values(array_filter($malicious_logs, function ($log_item) {
+                return isset($log_item['type']) && $log_item['type'] === 'uploaded file';
+            }));
             ?>
             <div class="wrap speedx-security-wrap">
                 <div class="ctm-hero">
@@ -215,6 +234,17 @@ if (!class_exists('SpeedX_Security_Patch')) {
                                         <span class="ctm-slider"></span>
                                     </span>
                                 </label>
+
+                                <label class="ctm-toggle-card">
+                                    <span class="ctm-toggle-card__text">
+                                        <strong>Alert on Core File Changes</strong>
+                                        <small>Shows a red admin alert when files outside <code>wp-content</code> are created, removed, or edited.</small>
+                                    </span>
+                                    <span class="ctm-switch">
+                                        <input type="checkbox" name="core_file_change_alert" value="1" <?php checked(!empty($settings['core_file_change_alert'])); ?> />
+                                        <span class="ctm-slider"></span>
+                                    </span>
+                                </label>
                             </div>
 
                             <div class="ctm-section">
@@ -256,6 +286,40 @@ if (!class_exists('SpeedX_Security_Patch')) {
                                 </div>
                             </div>
 
+                            <div class="ctm-section">
+                                <div class="ctm-section__head">
+                                    <h2>Malicious Attack Alerts</h2>
+                                    <p>Recent uploaded files detected outside <code>wp-content</code>, including full path and detection date/time.</p>
+                                </div>
+
+                                <?php if (empty($uploaded_file_logs)) : ?>
+                                    <p class="ctm-help">No uploaded files detected yet outside <code>wp-content</code>.</p>
+                                <?php else : ?>
+                                    <div class="ctm-attack-table-wrap">
+                                        <table class="ctm-attack-table">
+                                            <thead>
+                                                <tr>
+                                                    <th>Type</th>
+                                                    <th>Full Path</th>
+                                                    <th>Day</th>
+                                                    <th>Date &amp; Time</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <?php foreach (array_slice($uploaded_file_logs, 0, 25) as $log_item) : ?>
+                                                    <tr>
+                                                        <td><?php echo esc_html(isset($log_item['type']) ? ucwords($log_item['type']) : 'Unknown'); ?></td>
+                                                        <td><code><?php echo esc_html(isset($log_item['path']) ? $log_item['path'] : ''); ?></code></td>
+                                                        <td><?php echo esc_html(isset($log_item['day']) ? $log_item['day'] : ''); ?></td>
+                                                        <td><?php echo esc_html(isset($log_item['datetime']) ? $log_item['datetime'] : ''); ?></td>
+                                                    </tr>
+                                                <?php endforeach; ?>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+
                             <div class="ctm-submit-row">
                                 <?php submit_button('Save Security Settings', 'primary', 'submit', false); ?>
                             </div>
@@ -263,20 +327,6 @@ if (!class_exists('SpeedX_Security_Patch')) {
                     </div>
 
                     <div class="ctm-card ctm-card--side">
-                        <div class="ctm-side-block">
-                            <h3>Brand Theme</h3>
-                            <p>Styled to match the dark ClickTrack Marketing look with electric blue highlights, glossy cards, and a cleaner premium admin feel.</p>
-                        </div>
-
-                        <div class="ctm-side-block">
-                            <h3>Quick Notes</h3>
-                            <ul>
-                                <li>All existing plugin functionality remains unchanged.</li>
-                                <li>Sidebar shield icon is now branded blue.</li>
-                                <li>Country blocking still requires a country-code header from your server or CDN.</li>
-                            </ul>
-                        </div>
-
                         <div class="ctm-side-block">
                             <h3>Live Summary</h3>
                             <div class="ctm-mini-metric">
@@ -291,14 +341,27 @@ if (!class_exists('SpeedX_Security_Patch')) {
                                 <span>Login Attempts</span>
                                 <strong><?php echo esc_html($settings['login_attempt_limit']); ?></strong>
                             </div>
+                            <div class="ctm-mini-metric">
+                                <span>Core File Alert</span>
+                                <strong><?php echo !empty($settings['core_file_change_alert']) ? 'On' : 'Off'; ?></strong>
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
 
             <style>
+                body.toplevel_page_speedx-security-patch{
+                    background:#0b1119;
+                }
+                body.toplevel_page_speedx-security-patch #wpcontent{
+                    background:linear-gradient(180deg, #0b1119 0%, #090f17 100%);
+                }
+                body.toplevel_page_speedx-security-patch #wpbody-content{
+                    padding-bottom:24px;
+                }
                 .speedx-security-wrap{
-                    margin: 18px 20px 0 2px;
+                    margin:18px 12px 0 2px;
                     color:#d8ecff;
                     font-family: Poppins, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
                 }
@@ -309,7 +372,8 @@ if (!class_exists('SpeedX_Security_Patch')) {
                     margin-left:0;
                 }
                 .ctm-hero{
-                    max-width:1180px;
+                    max-width:none;
+                    width:100%;
                     padding:28px;
                     border-radius:22px;
                     background:
@@ -367,7 +431,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
                     font-size:15px;
                     line-height:1.7;
                     color:#a7c7df;
-                    max-width:720px;
+                    max-width:860px;
                 }
                 .ctm-stats{
                     display:flex;
@@ -398,10 +462,11 @@ if (!class_exists('SpeedX_Security_Patch')) {
                     letter-spacing:.06em;
                 }
                 .ctm-card-grid{
-                    max-width:1180px;
+                    max-width:none;
+                    width:100%;
                     margin-top:22px;
                     display:grid;
-                    grid-template-columns:minmax(0,1fr) 320px;
+                    grid-template-columns:minmax(0,1fr) minmax(300px, 26%);
                     gap:22px;
                     align-items:start;
                 }
@@ -488,6 +553,41 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 .ctm-help{
                     margin:10px 0 0;
                     color:#89abc2;
+                }
+                .ctm-attack-table-wrap{
+                    overflow:auto;
+                    border:1px solid rgba(82,197,255,.13);
+                    border-radius:14px;
+                }
+                .ctm-attack-table{
+                    width:100%;
+                    border-collapse:collapse;
+                    min-width:700px;
+                    background:rgba(5,14,27,.92);
+                }
+                .ctm-attack-table th,
+                .ctm-attack-table td{
+                    text-align:left;
+                    padding:11px 12px;
+                    border-bottom:1px solid rgba(82,197,255,.1);
+                    color:#cbe8fb;
+                    font-size:13px;
+                    vertical-align:top;
+                }
+                .ctm-attack-table th{
+                    color:#7fd3fb;
+                    font-size:12px;
+                    text-transform:uppercase;
+                    letter-spacing:.05em;
+                    background:rgba(11,28,52,.95);
+                }
+                .ctm-attack-table tr:last-child td{
+                    border-bottom:0;
+                }
+                .ctm-attack-table code{
+                    color:#9fe2ff;
+                    background:transparent;
+                    padding:0;
                 }
                 .ctm-highlight-row{
                     margin-top:14px;
@@ -806,6 +906,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 'custom_login_slug' => $new_slug,
                 'protect_wp_config_htaccess' => isset($_POST['protect_wp_config_htaccess']) ? 1 : 0,
                 'disallow_file_edit' => isset($_POST['disallow_file_edit']) ? 1 : 0,
+                'core_file_change_alert' => isset($_POST['core_file_change_alert']) ? 1 : 0,
                 'login_attempt_limit' => $login_attempt_limit,
                 'blocked_countries' => $blocked_countries,
             ];
@@ -829,6 +930,22 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 delete_transient($this->get_lockout_key());
             }
 
+            if (!empty($new_settings['core_file_change_alert'])) {
+                if (!get_option($this->file_monitor_snapshot_option)) {
+                    $baseline_snapshot = $this->collect_core_file_snapshot();
+                    if (!empty($baseline_snapshot)) {
+                        update_option($this->file_monitor_snapshot_option, $baseline_snapshot, false);
+                        update_option($this->file_monitor_hash_option, $this->hash_snapshot($baseline_snapshot), false);
+                    }
+                }
+            } else {
+                delete_option($this->file_monitor_hash_option);
+                delete_option($this->file_monitor_snapshot_option);
+                delete_option($this->file_monitor_log_option);
+                delete_transient($this->file_monitor_notice_transient);
+                delete_transient('speedx_security_patch_file_monitor_scan_lock');
+            }
+
             $redirect_url = add_query_arg(
                 [
                     'page' => 'speedx-security-patch',
@@ -842,6 +959,15 @@ if (!class_exists('SpeedX_Security_Patch')) {
         }
 
         public function admin_notices() {
+            if (!current_user_can('manage_options')) {
+                return;
+            }
+
+            $monitor_notice = get_transient($this->file_monitor_notice_transient);
+            if (!empty($monitor_notice)) {
+                echo '<div class="notice notice-error"><p><strong>Security Alert:</strong> ' . esc_html($monitor_notice) . '</p></div>';
+            }
+
             if (!isset($_GET['page']) || $_GET['page'] !== 'speedx-security-patch') {
                 return;
             }
@@ -856,6 +982,160 @@ if (!class_exists('SpeedX_Security_Patch')) {
                     echo '<div class="notice notice-warning"><p><strong>Country blocking note:</strong> This feature works when your server or CDN provides a visitor country code header such as <code>CF-IPCountry</code> or <code>GEOIP_COUNTRY_CODE</code>. If your hosting stack does not provide country detection, country blocking will not trigger.</p></div>';
                 }
             }
+        }
+
+        public function maybe_detect_core_file_changes() {
+            if (!is_admin() || !current_user_can('manage_options')) {
+                return;
+            }
+
+            $settings = $this->get_settings();
+            if (empty($settings['core_file_change_alert'])) {
+                return;
+            }
+
+            $current_snapshot = $this->collect_core_file_snapshot();
+            if (empty($current_snapshot)) {
+                return;
+            }
+
+            $stored_snapshot = get_option($this->file_monitor_snapshot_option, []);
+            if (!is_array($stored_snapshot) || empty($stored_snapshot)) {
+                update_option($this->file_monitor_snapshot_option, $current_snapshot, false);
+                update_option($this->file_monitor_hash_option, $this->hash_snapshot($current_snapshot), false);
+                return;
+            }
+
+            $current_hash = $this->hash_snapshot($current_snapshot);
+            $stored_hash = (string) get_option($this->file_monitor_hash_option, '');
+
+            if (empty($stored_hash) || !hash_equals($stored_hash, $current_hash)) {
+                $changes = $this->detect_core_snapshot_changes($stored_snapshot, $current_snapshot);
+                $new_count = $this->append_core_file_attack_logs($changes);
+                if ($new_count > 0) {
+                    $timestamp = current_time('mysql');
+                    set_transient(
+                        $this->file_monitor_notice_transient,
+                        $new_count . ' uploaded file(s) detected outside wp-content on ' . $timestamp . '. Check the Malicious Attack Alerts section.',
+                        DAY_IN_SECONDS
+                    );
+                }
+                update_option($this->file_monitor_snapshot_option, $current_snapshot, false);
+                update_option($this->file_monitor_hash_option, $current_hash, false);
+            }
+        }
+
+        private function collect_core_file_snapshot() {
+            $root_path = wp_normalize_path(trailingslashit(ABSPATH));
+            $excluded_path = wp_normalize_path($root_path . 'wp-content' . DIRECTORY_SEPARATOR);
+            $snapshot = [];
+
+            try {
+                $iterator = new RecursiveIteratorIterator(
+                    new RecursiveDirectoryIterator($root_path, FilesystemIterator::SKIP_DOTS),
+                    RecursiveIteratorIterator::SELF_FIRST
+                );
+            } catch (Exception $e) {
+                return '';
+            }
+
+            foreach ($iterator as $item) {
+                $pathname = wp_normalize_path($item->getPathname());
+                if (strpos($pathname, $excluded_path) === 0) {
+                    continue;
+                }
+
+                $relative = str_replace($root_path, '', $pathname);
+                if ($relative === '') {
+                    continue;
+                }
+
+                if ($item->isDir()) {
+                    $snapshot['dir:' . rtrim($relative, '/')] = (string) $item->getMTime();
+                } elseif ($item->isFile()) {
+                    $snapshot['file:' . $relative] = $item->getMTime() . '|' . $item->getSize();
+                }
+            }
+
+            ksort($snapshot);
+            return $snapshot;
+        }
+
+        private function hash_snapshot($snapshot) {
+            if (!is_array($snapshot)) {
+                return '';
+            }
+
+            ksort($snapshot);
+            return hash('sha256', wp_json_encode($snapshot));
+        }
+
+        private function detect_core_snapshot_changes($old_snapshot, $new_snapshot) {
+            $changes = [];
+
+            foreach ($new_snapshot as $path => $meta) {
+                if (!isset($old_snapshot[$path])) {
+                    $changes[] = ['type' => 'added', 'path' => $path];
+                    continue;
+                }
+
+                if ((string) $old_snapshot[$path] !== (string) $meta) {
+                    $changes[] = ['type' => 'modified', 'path' => $path];
+                }
+            }
+
+            foreach ($old_snapshot as $path => $meta) {
+                if (!isset($new_snapshot[$path])) {
+                    $changes[] = ['type' => 'deleted', 'path' => $path];
+                }
+            }
+
+            return $changes;
+        }
+
+        private function append_core_file_attack_logs($changes) {
+            if (empty($changes) || !is_array($changes)) {
+                return 0;
+            }
+
+            $existing_logs = get_option($this->file_monitor_log_option, []);
+            if (!is_array($existing_logs)) {
+                $existing_logs = [];
+            }
+
+            $time_for_display = current_time('Y-m-d H:i:s');
+            $day_for_display = current_time('l');
+            $new_rows = [];
+
+            foreach ($changes as $change) {
+                if (empty($change['path'])) {
+                    continue;
+                }
+
+                $raw_path = (string) $change['path'];
+                $change_type = isset($change['type']) ? (string) $change['type'] : '';
+
+                if ($change_type !== 'added' || strpos($raw_path, 'file:') !== 0) {
+                    continue;
+                }
+
+                $raw_path = substr($raw_path, 5);
+
+                $new_rows[] = [
+                    'type' => 'uploaded file',
+                    'path' => wp_normalize_path(trailingslashit(ABSPATH) . ltrim($raw_path, '/')),
+                    'day' => $day_for_display,
+                    'datetime' => $time_for_display,
+                ];
+            }
+
+            if (!empty($new_rows)) {
+                $updated_logs = array_merge($new_rows, $existing_logs);
+                $updated_logs = array_slice($updated_logs, 0, 300);
+                update_option($this->file_monitor_log_option, $updated_logs, false);
+            }
+
+            return count($new_rows);
         }
 
         public function maybe_block_country() {

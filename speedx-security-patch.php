@@ -156,6 +156,9 @@ if (!class_exists('SpeedX_Security_Patch')) {
             if (!is_array($malicious_logs)) {
                 $malicious_logs = [];
             }
+            $uploaded_file_logs = array_values(array_filter($malicious_logs, function ($log_item) {
+                return isset($log_item['type']) && $log_item['type'] === 'uploaded file';
+            }));
             ?>
             <div class="wrap speedx-security-wrap">
                 <div class="ctm-hero">
@@ -286,11 +289,11 @@ if (!class_exists('SpeedX_Security_Patch')) {
                             <div class="ctm-section">
                                 <div class="ctm-section__head">
                                     <h2>Malicious Attack Alerts</h2>
-                                    <p>Recent file changes detected outside <code>wp-content</code>, including full path and detection date/time.</p>
+                                    <p>Recent uploaded files detected outside <code>wp-content</code>, including full path and detection date/time.</p>
                                 </div>
 
-                                <?php if (empty($malicious_logs)) : ?>
-                                    <p class="ctm-help">No suspicious file changes detected yet.</p>
+                                <?php if (empty($uploaded_file_logs)) : ?>
+                                    <p class="ctm-help">No uploaded files detected yet outside <code>wp-content</code>.</p>
                                 <?php else : ?>
                                     <div class="ctm-attack-table-wrap">
                                         <table class="ctm-attack-table">
@@ -303,9 +306,9 @@ if (!class_exists('SpeedX_Security_Patch')) {
                                                 </tr>
                                             </thead>
                                             <tbody>
-                                                <?php foreach (array_slice($malicious_logs, 0, 25) as $log_item) : ?>
+                                                <?php foreach (array_slice($uploaded_file_logs, 0, 25) as $log_item) : ?>
                                                     <tr>
-                                                        <td><?php echo esc_html(isset($log_item['type']) ? ucfirst($log_item['type']) : 'Unknown'); ?></td>
+                                                        <td><?php echo esc_html(isset($log_item['type']) ? ucwords($log_item['type']) : 'Unknown'); ?></td>
                                                         <td><code><?php echo esc_html(isset($log_item['path']) ? $log_item['path'] : ''); ?></code></td>
                                                         <td><?php echo esc_html(isset($log_item['day']) ? $log_item['day'] : ''); ?></td>
                                                         <td><?php echo esc_html(isset($log_item['datetime']) ? $log_item['datetime'] : ''); ?></td>
@@ -1009,12 +1012,14 @@ if (!class_exists('SpeedX_Security_Patch')) {
             if (empty($stored_hash) || !hash_equals($stored_hash, $current_hash)) {
                 $changes = $this->detect_core_snapshot_changes($stored_snapshot, $current_snapshot);
                 $new_count = $this->append_core_file_attack_logs($changes);
-                $timestamp = current_time('mysql');
-                set_transient(
-                    $this->file_monitor_notice_transient,
-                    $new_count . ' file change(s) detected outside wp-content on ' . $timestamp . '. Check the Malicious Attack Alerts section.',
-                    DAY_IN_SECONDS
-                );
+                if ($new_count > 0) {
+                    $timestamp = current_time('mysql');
+                    set_transient(
+                        $this->file_monitor_notice_transient,
+                        $new_count . ' uploaded file(s) detected outside wp-content on ' . $timestamp . '. Check the Malicious Attack Alerts section.',
+                        DAY_IN_SECONDS
+                    );
+                }
                 update_option($this->file_monitor_snapshot_option, $current_snapshot, false);
                 update_option($this->file_monitor_hash_option, $current_hash, false);
             }
@@ -1108,16 +1113,16 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 }
 
                 $raw_path = (string) $change['path'];
-                $path_type = 'file';
-                if (strpos($raw_path, 'dir:') === 0) {
-                    $path_type = 'folder';
-                    $raw_path = substr($raw_path, 4);
-                } elseif (strpos($raw_path, 'file:') === 0) {
-                    $raw_path = substr($raw_path, 5);
+                $change_type = isset($change['type']) ? (string) $change['type'] : '';
+
+                if ($change_type !== 'added' || strpos($raw_path, 'file:') !== 0) {
+                    continue;
                 }
 
+                $raw_path = substr($raw_path, 5);
+
                 $new_rows[] = [
-                    'type' => isset($change['type']) ? sanitize_text_field($change['type']) . ' ' . $path_type : 'modified ' . $path_type,
+                    'type' => 'uploaded file',
                     'path' => wp_normalize_path(trailingslashit(ABSPATH) . ltrim($raw_path, '/')),
                     'day' => $day_for_display,
                     'datetime' => $time_for_display,

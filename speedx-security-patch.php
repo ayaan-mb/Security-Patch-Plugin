@@ -29,6 +29,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
             add_action('admin_init', [$this, 'register_settings']);
             add_action('admin_init', [$this, 'maybe_detect_core_file_changes'], 20);
             add_action('admin_post_speedx_save_settings', [$this, 'save_settings']);
+            add_action('admin_post_speedx_mark_attack_resolved', [$this, 'mark_attack_resolved']);
             add_action('admin_notices', [$this, 'admin_notices']);
 
             add_action('admin_enqueue_scripts', [$this, 'admin_assets']);
@@ -156,9 +157,9 @@ if (!class_exists('SpeedX_Security_Patch')) {
             if (!is_array($malicious_logs)) {
                 $malicious_logs = [];
             }
-            $uploaded_file_logs = array_values(array_filter($malicious_logs, function ($log_item) {
-                return isset($log_item['type']) && $log_item['type'] === 'uploaded file';
-            }));
+            $uploaded_file_logs = array_filter($malicious_logs, function ($log_item) {
+                return isset($log_item['type']) && $log_item['type'] === 'uploaded file' && empty($log_item['resolved']);
+            });
             ?>
             <div class="wrap speedx-security-wrap">
                 <div class="ctm-hero">
@@ -303,15 +304,25 @@ if (!class_exists('SpeedX_Security_Patch')) {
                                                     <th>Full Path</th>
                                                     <th>Day</th>
                                                     <th>Date &amp; Time</th>
+                                                    <th>Resolve</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
-                                                <?php foreach (array_slice($uploaded_file_logs, 0, 25) as $log_item) : ?>
+                                                <?php foreach (array_slice($uploaded_file_logs, 0, 25, true) as $log_key => $log_item) : ?>
                                                     <tr>
                                                         <td><?php echo esc_html(isset($log_item['type']) ? ucwords($log_item['type']) : 'Unknown'); ?></td>
                                                         <td><code><?php echo esc_html(isset($log_item['path']) ? $log_item['path'] : ''); ?></code></td>
                                                         <td><?php echo esc_html(isset($log_item['day']) ? $log_item['day'] : ''); ?></td>
                                                         <td><?php echo esc_html(isset($log_item['datetime']) ? $log_item['datetime'] : ''); ?></td>
+                                                        <td>
+                                                            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                                                                <?php wp_nonce_field('speedx_mark_attack_resolved_action', 'speedx_resolve_nonce'); ?>
+                                                                <input type="hidden" name="action" value="speedx_mark_attack_resolved">
+                                                                <input type="hidden" name="log_key" value="<?php echo esc_attr((string) $log_key); ?>">
+                                                                <input type="hidden" name="log_id" value="<?php echo esc_attr(isset($log_item['id']) ? (string) $log_item['id'] : ''); ?>">
+                                                                <button type="submit" class="button ctm-resolve-btn" title="Mark as resolved">✔</button>
+                                                            </form>
+                                                        </td>
                                                     </tr>
                                                 <?php endforeach; ?>
                                             </tbody>
@@ -588,6 +599,21 @@ if (!class_exists('SpeedX_Security_Patch')) {
                     color:#9fe2ff;
                     background:transparent;
                     padding:0;
+                }
+                .ctm-resolve-btn{
+                    min-width:34px;
+                    height:30px;
+                    line-height:1;
+                    padding:0;
+                    border-radius:8px;
+                    border:1px solid rgba(84,206,132,.45) !important;
+                    color:#8fffc5 !important;
+                    background:rgba(15,57,33,.8) !important;
+                    font-weight:700;
+                }
+                .ctm-resolve-btn:hover{
+                    background:rgba(20,76,43,.95) !important;
+                    color:#ffffff !important;
                 }
                 .ctm-highlight-row{
                     margin-top:14px;
@@ -984,6 +1010,39 @@ if (!class_exists('SpeedX_Security_Patch')) {
             }
         }
 
+        public function mark_attack_resolved() {
+            if (!current_user_can('manage_options')) {
+                wp_die('Unauthorized access.');
+            }
+
+            check_admin_referer('speedx_mark_attack_resolved_action', 'speedx_resolve_nonce');
+
+            $log_key = isset($_POST['log_key']) ? sanitize_text_field(wp_unslash($_POST['log_key'])) : '';
+            $log_id = isset($_POST['log_id']) ? sanitize_text_field(wp_unslash($_POST['log_id'])) : '';
+            $logs = get_option($this->file_monitor_log_option, []);
+
+            if (is_array($logs)) {
+                foreach ($logs as $index => $entry) {
+                    $entry_id = isset($entry['id']) ? (string) $entry['id'] : '';
+                    if ((string) $index === (string) $log_key || (!empty($log_id) && $entry_id === $log_id)) {
+                        $logs[$index]['resolved'] = 1;
+                        break;
+                    }
+                }
+                update_option($this->file_monitor_log_option, $logs, false);
+            }
+
+            $redirect_url = add_query_arg(
+                [
+                    'page' => 'speedx-security-patch',
+                ],
+                admin_url('admin.php')
+            );
+
+            wp_safe_redirect($redirect_url);
+            exit;
+        }
+
         public function maybe_detect_core_file_changes() {
             if (!is_admin() || !current_user_can('manage_options')) {
                 return;
@@ -1122,10 +1181,12 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 $raw_path = substr($raw_path, 5);
 
                 $new_rows[] = [
+                    'id' => wp_generate_uuid4(),
                     'type' => 'uploaded file',
                     'path' => wp_normalize_path(trailingslashit(ABSPATH) . ltrim($raw_path, '/')),
                     'day' => $day_for_display,
                     'datetime' => $time_for_display,
+                    'resolved' => 0,
                 ];
             }
 

@@ -1,6 +1,6 @@
 <?php
 /**
- * Plugin Name: Good Plugin
+ * Plugin Name: Security Patch By Click Track Marketing
  * Description: Custom login URL changer and security patch manager for WordPress.
  * Version: 1.3.0
  * Author: Click Track Marketing

@@ -991,11 +991,6 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 return;
             }
 
-            if (get_transient('speedx_security_patch_file_monitor_scan_lock')) {
-                return;
-            }
-            set_transient('speedx_security_patch_file_monitor_scan_lock', 1, 5 * MINUTE_IN_SECONDS);
-
             $current_snapshot = $this->collect_core_file_snapshot();
             if (empty($current_snapshot)) {
                 return;
@@ -1026,31 +1021,35 @@ if (!class_exists('SpeedX_Security_Patch')) {
         }
 
         private function collect_core_file_snapshot() {
-            $root_path = trailingslashit(ABSPATH);
-            $excluded_path = $root_path . 'wp-content' . DIRECTORY_SEPARATOR;
+            $root_path = wp_normalize_path(trailingslashit(ABSPATH));
+            $excluded_path = wp_normalize_path($root_path . 'wp-content' . DIRECTORY_SEPARATOR);
             $snapshot = [];
 
             try {
                 $iterator = new RecursiveIteratorIterator(
                     new RecursiveDirectoryIterator($root_path, FilesystemIterator::SKIP_DOTS),
-                    RecursiveIteratorIterator::LEAVES_ONLY
+                    RecursiveIteratorIterator::SELF_FIRST
                 );
             } catch (Exception $e) {
                 return '';
             }
 
             foreach ($iterator as $item) {
-                if (!$item->isFile()) {
-                    continue;
-                }
-
-                $pathname = $item->getPathname();
+                $pathname = wp_normalize_path($item->getPathname());
                 if (strpos($pathname, $excluded_path) === 0) {
                     continue;
                 }
 
                 $relative = str_replace($root_path, '', $pathname);
-                $snapshot[$relative] = $item->getMTime() . '|' . $item->getSize();
+                if ($relative === '') {
+                    continue;
+                }
+
+                if ($item->isDir()) {
+                    $snapshot['dir:' . rtrim($relative, '/')] = (string) $item->getMTime();
+                } elseif ($item->isFile()) {
+                    $snapshot['file:' . $relative] = $item->getMTime() . '|' . $item->getSize();
+                }
             }
 
             ksort($snapshot);
@@ -1108,9 +1107,18 @@ if (!class_exists('SpeedX_Security_Patch')) {
                     continue;
                 }
 
+                $raw_path = (string) $change['path'];
+                $path_type = 'file';
+                if (strpos($raw_path, 'dir:') === 0) {
+                    $path_type = 'folder';
+                    $raw_path = substr($raw_path, 4);
+                } elseif (strpos($raw_path, 'file:') === 0) {
+                    $raw_path = substr($raw_path, 5);
+                }
+
                 $new_rows[] = [
-                    'type' => isset($change['type']) ? sanitize_text_field($change['type']) : 'modified',
-                    'path' => trailingslashit(ABSPATH) . ltrim((string) $change['path'], '/'),
+                    'type' => isset($change['type']) ? sanitize_text_field($change['type']) . ' ' . $path_type : 'modified ' . $path_type,
+                    'path' => wp_normalize_path(trailingslashit(ABSPATH) . ltrim($raw_path, '/')),
                     'day' => $day_for_display,
                     'datetime' => $time_for_display,
                 ];

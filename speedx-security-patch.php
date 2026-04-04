@@ -1,9 +1,9 @@
 <?php
 /**
- * Plugin Name: Security Patch by Ayaan
+ * Plugin Name: Security Patch by Click Track Marketing
  * Description: Custom login URL changer and security patch manager for WordPress.
  * Version: 1.3.0
- * Author: Ayaan
+ * Author: Click Track Marketing
  * Author URI: https://www.clicktrackmarketing.com/
  */
 

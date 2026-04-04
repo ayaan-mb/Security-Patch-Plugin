@@ -17,6 +17,8 @@ if (!class_exists('SpeedX_Security_Patch')) {
         private $htaccess_marker = 'SpeedX Security Patch - wp-config Protection';
         private $lockout_minutes = 30;
         private $file_monitor_hash_option = 'speedx_security_patch_file_monitor_hash';
+        private $file_monitor_snapshot_option = 'speedx_security_patch_file_monitor_snapshot';
+        private $file_monitor_log_option = 'speedx_security_patch_file_monitor_log';
         private $file_monitor_notice_transient = 'speedx_security_patch_file_monitor_notice';
 
         public function __construct() {
@@ -78,6 +80,8 @@ if (!class_exists('SpeedX_Security_Patch')) {
 
             delete_transient($this->file_monitor_notice_transient);
             delete_transient('speedx_security_patch_file_monitor_scan_lock');
+            delete_option($this->file_monitor_snapshot_option);
+            delete_option($this->file_monitor_hash_option);
         }
 
         private function get_settings() {
@@ -148,6 +152,10 @@ if (!class_exists('SpeedX_Security_Patch')) {
             $custom_login_url = home_url('/' . trim($settings['custom_login_slug'], '/') . '/');
             $countries = $this->get_country_list();
             $blocked_count = is_array($settings['blocked_countries']) ? count($settings['blocked_countries']) : 0;
+            $malicious_logs = get_option($this->file_monitor_log_option, []);
+            if (!is_array($malicious_logs)) {
+                $malicious_logs = [];
+            }
             ?>
             <div class="wrap speedx-security-wrap">
                 <div class="ctm-hero">
@@ -273,6 +281,40 @@ if (!class_exists('SpeedX_Security_Patch')) {
                                         </label>
                                     <?php endforeach; ?>
                                 </div>
+                            </div>
+
+                            <div class="ctm-section">
+                                <div class="ctm-section__head">
+                                    <h2>Malicious Attack Alerts</h2>
+                                    <p>Recent file changes detected outside <code>wp-content</code>, including full path and detection date/time.</p>
+                                </div>
+
+                                <?php if (empty($malicious_logs)) : ?>
+                                    <p class="ctm-help">No suspicious file changes detected yet.</p>
+                                <?php else : ?>
+                                    <div class="ctm-attack-table-wrap">
+                                        <table class="ctm-attack-table">
+                                            <thead>
+                                                <tr>
+                                                    <th>Type</th>
+                                                    <th>Full Path</th>
+                                                    <th>Day</th>
+                                                    <th>Date &amp; Time</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <?php foreach (array_slice($malicious_logs, 0, 25) as $log_item) : ?>
+                                                    <tr>
+                                                        <td><?php echo esc_html(isset($log_item['type']) ? ucfirst($log_item['type']) : 'Unknown'); ?></td>
+                                                        <td><code><?php echo esc_html(isset($log_item['path']) ? $log_item['path'] : ''); ?></code></td>
+                                                        <td><?php echo esc_html(isset($log_item['day']) ? $log_item['day'] : ''); ?></td>
+                                                        <td><?php echo esc_html(isset($log_item['datetime']) ? $log_item['datetime'] : ''); ?></td>
+                                                    </tr>
+                                                <?php endforeach; ?>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                <?php endif; ?>
                             </div>
 
                             <div class="ctm-submit-row">
@@ -508,6 +550,41 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 .ctm-help{
                     margin:10px 0 0;
                     color:#89abc2;
+                }
+                .ctm-attack-table-wrap{
+                    overflow:auto;
+                    border:1px solid rgba(82,197,255,.13);
+                    border-radius:14px;
+                }
+                .ctm-attack-table{
+                    width:100%;
+                    border-collapse:collapse;
+                    min-width:700px;
+                    background:rgba(5,14,27,.92);
+                }
+                .ctm-attack-table th,
+                .ctm-attack-table td{
+                    text-align:left;
+                    padding:11px 12px;
+                    border-bottom:1px solid rgba(82,197,255,.1);
+                    color:#cbe8fb;
+                    font-size:13px;
+                    vertical-align:top;
+                }
+                .ctm-attack-table th{
+                    color:#7fd3fb;
+                    font-size:12px;
+                    text-transform:uppercase;
+                    letter-spacing:.05em;
+                    background:rgba(11,28,52,.95);
+                }
+                .ctm-attack-table tr:last-child td{
+                    border-bottom:0;
+                }
+                .ctm-attack-table code{
+                    color:#9fe2ff;
+                    background:transparent;
+                    padding:0;
                 }
                 .ctm-highlight-row{
                     margin-top:14px;
@@ -851,14 +928,17 @@ if (!class_exists('SpeedX_Security_Patch')) {
             }
 
             if (!empty($new_settings['core_file_change_alert'])) {
-                if (!get_option($this->file_monitor_hash_option)) {
-                    $baseline_hash = $this->build_core_file_fingerprint();
-                    if (!empty($baseline_hash)) {
-                        update_option($this->file_monitor_hash_option, $baseline_hash, false);
+                if (!get_option($this->file_monitor_snapshot_option)) {
+                    $baseline_snapshot = $this->collect_core_file_snapshot();
+                    if (!empty($baseline_snapshot)) {
+                        update_option($this->file_monitor_snapshot_option, $baseline_snapshot, false);
+                        update_option($this->file_monitor_hash_option, $this->hash_snapshot($baseline_snapshot), false);
                     }
                 }
             } else {
                 delete_option($this->file_monitor_hash_option);
+                delete_option($this->file_monitor_snapshot_option);
+                delete_option($this->file_monitor_log_option);
                 delete_transient($this->file_monitor_notice_transient);
                 delete_transient('speedx_security_patch_file_monitor_scan_lock');
             }
@@ -916,32 +996,39 @@ if (!class_exists('SpeedX_Security_Patch')) {
             }
             set_transient('speedx_security_patch_file_monitor_scan_lock', 1, 5 * MINUTE_IN_SECONDS);
 
-            $current_hash = $this->build_core_file_fingerprint();
-            if (empty($current_hash)) {
+            $current_snapshot = $this->collect_core_file_snapshot();
+            if (empty($current_snapshot)) {
                 return;
             }
 
-            $stored_hash = get_option($this->file_monitor_hash_option, '');
-            if (empty($stored_hash)) {
-                update_option($this->file_monitor_hash_option, $current_hash, false);
+            $stored_snapshot = get_option($this->file_monitor_snapshot_option, []);
+            if (!is_array($stored_snapshot) || empty($stored_snapshot)) {
+                update_option($this->file_monitor_snapshot_option, $current_snapshot, false);
+                update_option($this->file_monitor_hash_option, $this->hash_snapshot($current_snapshot), false);
                 return;
             }
 
-            if (!hash_equals((string) $stored_hash, (string) $current_hash)) {
+            $current_hash = $this->hash_snapshot($current_snapshot);
+            $stored_hash = (string) get_option($this->file_monitor_hash_option, '');
+
+            if (empty($stored_hash) || !hash_equals($stored_hash, $current_hash)) {
+                $changes = $this->detect_core_snapshot_changes($stored_snapshot, $current_snapshot);
+                $new_count = $this->append_core_file_attack_logs($changes);
                 $timestamp = current_time('mysql');
                 set_transient(
                     $this->file_monitor_notice_transient,
-                    'Changes were detected outside wp-content on ' . $timestamp . '. Review your server files immediately.',
+                    $new_count . ' file change(s) detected outside wp-content on ' . $timestamp . '. Check the Malicious Attack Alerts section.',
                     DAY_IN_SECONDS
                 );
+                update_option($this->file_monitor_snapshot_option, $current_snapshot, false);
                 update_option($this->file_monitor_hash_option, $current_hash, false);
             }
         }
 
-        private function build_core_file_fingerprint() {
+        private function collect_core_file_snapshot() {
             $root_path = trailingslashit(ABSPATH);
             $excluded_path = $root_path . 'wp-content' . DIRECTORY_SEPARATOR;
-            $files = [];
+            $snapshot = [];
 
             try {
                 $iterator = new RecursiveIteratorIterator(
@@ -963,11 +1050,79 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 }
 
                 $relative = str_replace($root_path, '', $pathname);
-                $files[] = $relative . '|' . $item->getMTime() . '|' . $item->getSize();
+                $snapshot[$relative] = $item->getMTime() . '|' . $item->getSize();
             }
 
-            sort($files);
-            return hash('sha256', implode("\n", $files));
+            ksort($snapshot);
+            return $snapshot;
+        }
+
+        private function hash_snapshot($snapshot) {
+            if (!is_array($snapshot)) {
+                return '';
+            }
+
+            ksort($snapshot);
+            return hash('sha256', wp_json_encode($snapshot));
+        }
+
+        private function detect_core_snapshot_changes($old_snapshot, $new_snapshot) {
+            $changes = [];
+
+            foreach ($new_snapshot as $path => $meta) {
+                if (!isset($old_snapshot[$path])) {
+                    $changes[] = ['type' => 'added', 'path' => $path];
+                    continue;
+                }
+
+                if ((string) $old_snapshot[$path] !== (string) $meta) {
+                    $changes[] = ['type' => 'modified', 'path' => $path];
+                }
+            }
+
+            foreach ($old_snapshot as $path => $meta) {
+                if (!isset($new_snapshot[$path])) {
+                    $changes[] = ['type' => 'deleted', 'path' => $path];
+                }
+            }
+
+            return $changes;
+        }
+
+        private function append_core_file_attack_logs($changes) {
+            if (empty($changes) || !is_array($changes)) {
+                return 0;
+            }
+
+            $existing_logs = get_option($this->file_monitor_log_option, []);
+            if (!is_array($existing_logs)) {
+                $existing_logs = [];
+            }
+
+            $time_for_display = current_time('Y-m-d H:i:s');
+            $day_for_display = current_time('l');
+            $new_rows = [];
+
+            foreach ($changes as $change) {
+                if (empty($change['path'])) {
+                    continue;
+                }
+
+                $new_rows[] = [
+                    'type' => isset($change['type']) ? sanitize_text_field($change['type']) : 'modified',
+                    'path' => trailingslashit(ABSPATH) . ltrim((string) $change['path'], '/'),
+                    'day' => $day_for_display,
+                    'datetime' => $time_for_display,
+                ];
+            }
+
+            if (!empty($new_rows)) {
+                $updated_logs = array_merge($new_rows, $existing_logs);
+                $updated_logs = array_slice($updated_logs, 0, 300);
+                update_option($this->file_monitor_log_option, $updated_logs, false);
+            }
+
+            return count($new_rows);
         }
 
         public function maybe_block_country() {

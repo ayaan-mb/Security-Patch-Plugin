@@ -306,8 +306,17 @@ if (!class_exists('SpeedX_Security_Patch')) {
             </div>
 
             <style>
+                body.toplevel_page_speedx-security-patch{
+                    background:#0b1119;
+                }
+                body.toplevel_page_speedx-security-patch #wpcontent{
+                    background:linear-gradient(180deg, #0b1119 0%, #090f17 100%);
+                }
+                body.toplevel_page_speedx-security-patch #wpbody-content{
+                    padding-bottom:24px;
+                }
                 .speedx-security-wrap{
-                    margin: 18px 20px 0 2px;
+                    margin:18px 12px 0 2px;
                     color:#d8ecff;
                     font-family: Poppins, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
                 }
@@ -318,7 +327,8 @@ if (!class_exists('SpeedX_Security_Patch')) {
                     margin-left:0;
                 }
                 .ctm-hero{
-                    max-width:1180px;
+                    max-width:none;
+                    width:100%;
                     padding:28px;
                     border-radius:22px;
                     background:
@@ -376,7 +386,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
                     font-size:15px;
                     line-height:1.7;
                     color:#a7c7df;
-                    max-width:720px;
+                    max-width:860px;
                 }
                 .ctm-stats{
                     display:flex;
@@ -407,10 +417,11 @@ if (!class_exists('SpeedX_Security_Patch')) {
                     letter-spacing:.06em;
                 }
                 .ctm-card-grid{
-                    max-width:1180px;
+                    max-width:none;
+                    width:100%;
                     margin-top:22px;
                     display:grid;
-                    grid-template-columns:minmax(0,1fr) 320px;
+                    grid-template-columns:minmax(0,1fr) minmax(300px, 26%);
                     gap:22px;
                     align-items:start;
                 }

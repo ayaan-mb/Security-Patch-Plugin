@@ -20,6 +20,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
         private $file_monitor_snapshot_option = 'speedx_security_patch_file_monitor_snapshot';
         private $file_monitor_log_option = 'speedx_security_patch_file_monitor_log';
         private $file_monitor_notice_transient = 'speedx_security_patch_file_monitor_notice';
+        private $readonly_permissions_option = 'speedx_security_patch_non_wp_content_permissions';
 
         public function __construct() {
             register_activation_hook(__FILE__, [$this, 'activate']);
@@ -59,6 +60,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 'protect_wp_config_htaccess' => 0,
                 'disallow_file_edit' => 0,
                 'core_file_change_alert' => 0,
+                'lock_non_wp_content_writes' => 0,
                 'login_attempt_limit' => 'none',
                 'blocked_countries' => [],
             ];
@@ -79,6 +81,10 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 $this->remove_wp_config_rule();
             }
 
+            if (!empty($settings['lock_non_wp_content_writes'])) {
+                $this->remove_non_wp_content_lock();
+            }
+
             delete_transient($this->file_monitor_notice_transient);
             delete_transient('speedx_security_patch_file_monitor_scan_lock');
             delete_option($this->file_monitor_snapshot_option);
@@ -91,6 +97,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 'protect_wp_config_htaccess' => 0,
                 'disallow_file_edit' => 0,
                 'core_file_change_alert' => 0,
+                'lock_non_wp_content_writes' => 0,
                 'login_attempt_limit' => 'none',
                 'blocked_countries' => [],
             ];
@@ -246,6 +253,17 @@ if (!class_exists('SpeedX_Security_Patch')) {
                                         <span class="ctm-slider"></span>
                                     </span>
                                 </label>
+
+                                <label class="ctm-toggle-card">
+                                    <span class="ctm-toggle-card__text">
+                                        <strong>Disable file editing and uploading completely except wp-content</strong>
+                                        <small>Sets files/folders outside <code>wp-content</code> to read-only so they appear greyed out and cannot be edited/uploaded.</small>
+                                    </span>
+                                    <span class="ctm-switch">
+                                        <input type="checkbox" name="lock_non_wp_content_writes" value="1" <?php checked(!empty($settings['lock_non_wp_content_writes'])); ?> />
+                                        <span class="ctm-slider"></span>
+                                    </span>
+                                </label>
                             </div>
 
                             <div class="ctm-section">
@@ -355,6 +373,10 @@ if (!class_exists('SpeedX_Security_Patch')) {
                             <div class="ctm-mini-metric">
                                 <span>Core File Alert</span>
                                 <strong><?php echo !empty($settings['core_file_change_alert']) ? 'On' : 'Off'; ?></strong>
+                            </div>
+                            <div class="ctm-mini-metric">
+                                <span>Non-wp-content Lock</span>
+                                <strong><?php echo !empty($settings['lock_non_wp_content_writes']) ? 'On' : 'Off'; ?></strong>
                             </div>
                         </div>
                     </div>
@@ -569,56 +591,6 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 .ctm-help{
                     margin:10px 0 0;
                     color:#ffffff;
-                }
-                .ctm-attack-table-wrap{
-                    overflow:auto;
-                    border:1px solid rgba(82,197,255,.13);
-                    border-radius:14px;
-                }
-                .ctm-attack-table{
-                    width:100%;
-                    border-collapse:collapse;
-                    min-width:700px;
-                    background:rgba(5,14,27,.92);
-                }
-                .ctm-attack-table th,
-                .ctm-attack-table td{
-                    text-align:left;
-                    padding:11px 12px;
-                    border-bottom:1px solid rgba(82,197,255,.1);
-                    color:#cbe8fb;
-                    font-size:13px;
-                    vertical-align:top;
-                }
-                .ctm-attack-table th{
-                    color:#7fd3fb;
-                    font-size:12px;
-                    text-transform:uppercase;
-                    letter-spacing:.05em;
-                    background:rgba(11,28,52,.95);
-                }
-                .ctm-attack-table tr:last-child td{
-                    border-bottom:0;
-                }
-                .ctm-attack-table code{
-                    color:#9fe2ff;
-                    background:transparent;
-                    padding:0;
-                }
-                .ctm-resolve-btn{
-                    min-width:34px;
-                    height:30px;
-                    line-height:1;
-                    padding:0;
-                    border-radius:8px;
-                    border:1px solid rgba(84,206,132,.45) !important;
-                    color:#8fffc5 !important;
-                    background:rgba(15,57,33,.8) !important;
-                    font-weight:700;
-                }
-                .ctm-resolve-btn:hover{
-                    background:rgba(20,76,43,.95) !important;
-                    color:#ffffff !important;
                 }
                 .ctm-attack-table-wrap{
                     overflow:auto;
@@ -988,6 +960,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 'protect_wp_config_htaccess' => isset($_POST['protect_wp_config_htaccess']) ? 1 : 0,
                 'disallow_file_edit' => isset($_POST['disallow_file_edit']) ? 1 : 0,
                 'core_file_change_alert' => isset($_POST['core_file_change_alert']) ? 1 : 0,
+                'lock_non_wp_content_writes' => isset($_POST['lock_non_wp_content_writes']) ? 1 : 0,
                 'login_attempt_limit' => $login_attempt_limit,
                 'blocked_countries' => $blocked_countries,
             ];
@@ -1004,6 +977,12 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 $this->add_wp_config_rule();
             } else {
                 $this->remove_wp_config_rule();
+            }
+
+            if (!empty($new_settings['lock_non_wp_content_writes'])) {
+                $this->apply_non_wp_content_lock();
+            } else {
+                $this->remove_non_wp_content_lock();
             }
 
             if ($login_attempt_limit === 'none') {
@@ -1096,6 +1075,70 @@ if (!class_exists('SpeedX_Security_Patch')) {
 
             wp_safe_redirect($redirect_url);
             exit;
+        }
+
+        private function apply_non_wp_content_lock() {
+            if (!function_exists('chmod')) {
+                return;
+            }
+
+            $root_path = wp_normalize_path(trailingslashit(ABSPATH));
+            $excluded_path = wp_normalize_path($root_path . 'wp-content' . DIRECTORY_SEPARATOR);
+            $permission_map = [];
+
+            try {
+                $iterator = new RecursiveIteratorIterator(
+                    new RecursiveDirectoryIterator($root_path, FilesystemIterator::SKIP_DOTS),
+                    RecursiveIteratorIterator::SELF_FIRST
+                );
+            } catch (Exception $e) {
+                return;
+            }
+
+            foreach ($iterator as $item) {
+                $pathname = wp_normalize_path($item->getPathname());
+                if (strpos($pathname, $excluded_path) === 0 || is_link($pathname)) {
+                    continue;
+                }
+
+                $relative = str_replace($root_path, '', $pathname);
+                if ($relative === '') {
+                    continue;
+                }
+
+                $current_perms = @fileperms($pathname);
+                if ($current_perms !== false) {
+                    $permission_map[$pathname] = substr(sprintf('%o', $current_perms), -4);
+                }
+
+                if ($item->isDir()) {
+                    @chmod($pathname, 0555);
+                } elseif ($item->isFile()) {
+                    @chmod($pathname, 0444);
+                }
+            }
+
+            update_option($this->readonly_permissions_option, $permission_map, false);
+        }
+
+        private function remove_non_wp_content_lock() {
+            if (!function_exists('chmod')) {
+                return;
+            }
+
+            $permission_map = get_option($this->readonly_permissions_option, []);
+            if (!is_array($permission_map) || empty($permission_map)) {
+                return;
+            }
+
+            foreach ($permission_map as $pathname => $mode) {
+                if (!file_exists($pathname)) {
+                    continue;
+                }
+                @chmod($pathname, octdec((string) $mode));
+            }
+
+            delete_option($this->readonly_permissions_option);
         }
 
         public function maybe_detect_core_file_changes() {

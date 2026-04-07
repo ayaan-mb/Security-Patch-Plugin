@@ -28,6 +28,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
 
             add_action('admin_menu', [$this, 'admin_menu']);
             add_action('admin_init', [$this, 'register_settings']);
+            add_action('admin_init', [$this, 'enforce_non_wp_content_write_requests'], 1);
             add_action('admin_init', [$this, 'maybe_detect_core_file_changes'], 20);
             add_action('admin_post_speedx_save_settings', [$this, 'save_settings']);
             add_action('admin_post_speedx_mark_attack_resolved', [$this, 'mark_attack_resolved']);
@@ -1145,6 +1146,137 @@ if (!class_exists('SpeedX_Security_Patch')) {
             }
 
             delete_option($this->readonly_permissions_option);
+        }
+
+        public function enforce_non_wp_content_write_requests() {
+            if (!is_admin() || strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET')) !== 'POST') {
+                return;
+            }
+
+            $settings = $this->get_settings();
+            if (empty($settings['lock_non_wp_content_writes'])) {
+                return;
+            }
+
+            $action = isset($_REQUEST['action']) ? sanitize_text_field(wp_unslash($_REQUEST['action'])) : '';
+            if (in_array($action, ['speedx_save_settings', 'speedx_mark_attack_resolved'], true)) {
+                return;
+            }
+
+            if (!$this->is_probable_write_request()) {
+                return;
+            }
+
+            $paths = $this->extract_request_paths_for_lock_check();
+            foreach ($paths as $path) {
+                if ($this->is_non_wp_content_path($path)) {
+                    wp_die('Blocked by Security Patch: Editing/uploading outside wp-content is disabled.', 403);
+                }
+            }
+
+            if (empty($paths) && $this->is_known_file_manager_write_action($action)) {
+                wp_die('Blocked by Security Patch: Editing/uploading outside wp-content is disabled.', 403);
+            }
+        }
+
+        private function is_probable_write_request() {
+            $write_cmds = ['upload', 'put', 'rename', 'rm', 'mkdir', 'mkfile', 'paste', 'duplicate', 'archive', 'extract', 'chmod', 'save'];
+            $write_action_hints = ['upload', 'save', 'edit', 'delete', 'remove', 'rename', 'mkdir', 'mkfile', 'paste', 'extract', 'archive', 'chmod'];
+
+            $cmd = isset($_REQUEST['cmd']) ? strtolower(sanitize_text_field(wp_unslash($_REQUEST['cmd']))) : '';
+            if (in_array($cmd, $write_cmds, true)) {
+                return true;
+            }
+
+            $action = isset($_REQUEST['action']) ? strtolower(sanitize_text_field(wp_unslash($_REQUEST['action']))) : '';
+            foreach ($write_action_hints as $hint) {
+                if ($action !== '' && strpos($action, $hint) !== false) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private function is_known_file_manager_write_action($action) {
+            $action = strtolower((string) $action);
+            $known_actions = [
+                'upload_file_folder_manager',
+                'save_file_folder_manager',
+                'delete_file_folder_manager',
+                'rename_file_folder_manager',
+                'mk_file_folder_manager',
+                'paste_file_folder_manager',
+                'archive_file_folder_manager',
+                'extract_file_folder_manager',
+                'chmod_file_folder_manager',
+                'duplicate_file_folder_manager',
+            ];
+
+            return in_array($action, $known_actions, true);
+        }
+
+        private function extract_request_paths_for_lock_check() {
+            $candidates = [];
+
+            $walker = function ($value) use (&$walker, &$candidates) {
+                if (is_array($value)) {
+                    foreach ($value as $nested) {
+                        $walker($nested);
+                    }
+                    return;
+                }
+
+                if (!is_string($value) || $value === '') {
+                    return;
+                }
+
+                $raw = wp_unslash($value);
+                $candidates[] = $raw;
+
+                $decoded = base64_decode(strtr($raw, '-_', '+/'), true);
+                if (is_string($decoded) && $decoded !== '') {
+                    $candidates[] = $decoded;
+                }
+
+                if (strpos($raw, '_') !== false) {
+                    $parts = explode('_', $raw);
+                    $tail = end($parts);
+                    $tail_decoded = base64_decode(strtr((string) $tail, '-_', '+/'), true);
+                    if (is_string($tail_decoded) && $tail_decoded !== '') {
+                        $candidates[] = $tail_decoded;
+                    }
+                }
+            };
+
+            $walker($_REQUEST);
+            $normalized = [];
+            foreach ($candidates as $candidate) {
+                $candidate = trim((string) $candidate);
+                if ($candidate === '') {
+                    continue;
+                }
+
+                $path = $candidate;
+                if ($candidate[0] !== '/' && strpos($candidate, ':\\') === false) {
+                    $path = trailingslashit(ABSPATH) . ltrim($candidate, '/');
+                }
+                $normalized[] = wp_normalize_path($path);
+            }
+
+            return array_values(array_unique($normalized));
+        }
+
+        private function is_non_wp_content_path($path) {
+            $path = wp_normalize_path((string) $path);
+            $root = wp_normalize_path(trailingslashit(ABSPATH));
+            $allowed = wp_normalize_path($root . 'wp-content' . DIRECTORY_SEPARATOR);
+
+            if (strpos($path, $root) !== 0) {
+                return false;
+            }
+
+            return strpos($path, $allowed) !== 0;
         }
 
         public function maybe_detect_core_file_changes() {

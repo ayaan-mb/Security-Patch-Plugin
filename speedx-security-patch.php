@@ -362,6 +362,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
             </div>
 
             <style>
+                @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap');
                 body.toplevel_page_speedx-security-patch{
                     background:#0b1119;
                 }
@@ -374,6 +375,10 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 .speedx-security-wrap{
                     margin:18px 12px 0 2px;
                     color:#d8ecff;
+                    font-family: Poppins, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+                }
+                .speedx-security-wrap,
+                .speedx-security-wrap *{
                     font-family: Poppins, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
                 }
                 .speedx-security-wrap *, .speedx-security-wrap *:before, .speedx-security-wrap *:after{
@@ -441,7 +446,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
                     margin:0;
                     font-size:15px;
                     line-height:1.7;
-                    color:#a7c7df;
+                    color:#ffffff;
                     max-width:860px;
                 }
                 .ctm-stats{
@@ -467,7 +472,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 }
                 .ctm-stat__label{
                     display:block;
-                    color:#9ec0da;
+                    color:#ffffff;
                     font-size:12px;
                     text-transform:uppercase;
                     letter-spacing:.06em;
@@ -513,7 +518,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 }
                 .ctm-section__head p{
                     margin:0;
-                    color:#9dc0d9;
+                    color:#ffffff;
                     font-size:14px;
                     line-height:1.7;
                 }
@@ -563,7 +568,57 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 }
                 .ctm-help{
                     margin:10px 0 0;
-                    color:#89abc2;
+                    color:#ffffff;
+                }
+                .ctm-attack-table-wrap{
+                    overflow:auto;
+                    border:1px solid rgba(82,197,255,.13);
+                    border-radius:14px;
+                }
+                .ctm-attack-table{
+                    width:100%;
+                    border-collapse:collapse;
+                    min-width:700px;
+                    background:rgba(5,14,27,.92);
+                }
+                .ctm-attack-table th,
+                .ctm-attack-table td{
+                    text-align:left;
+                    padding:11px 12px;
+                    border-bottom:1px solid rgba(82,197,255,.1);
+                    color:#cbe8fb;
+                    font-size:13px;
+                    vertical-align:top;
+                }
+                .ctm-attack-table th{
+                    color:#7fd3fb;
+                    font-size:12px;
+                    text-transform:uppercase;
+                    letter-spacing:.05em;
+                    background:rgba(11,28,52,.95);
+                }
+                .ctm-attack-table tr:last-child td{
+                    border-bottom:0;
+                }
+                .ctm-attack-table code{
+                    color:#9fe2ff;
+                    background:transparent;
+                    padding:0;
+                }
+                .ctm-resolve-btn{
+                    min-width:34px;
+                    height:30px;
+                    line-height:1;
+                    padding:0;
+                    border-radius:8px;
+                    border:1px solid rgba(84,206,132,.45) !important;
+                    color:#8fffc5 !important;
+                    background:rgba(15,57,33,.8) !important;
+                    font-weight:700;
+                }
+                .ctm-resolve-btn:hover{
+                    background:rgba(20,76,43,.95) !important;
+                    color:#ffffff !important;
                 }
                 .ctm-attack-table-wrap{
                     overflow:auto;
@@ -665,7 +720,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 }
                 .ctm-toggle-card__text small{
                     display:block;
-                    color:#95b7cf;
+                    color:#ffffff;
                     line-height:1.7;
                     font-size:13px;
                 }
@@ -798,7 +853,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 }
                 .ctm-side-block p,
                 .ctm-side-block li{
-                    color:#a6c5db;
+                    color:#ffffff;
                     line-height:1.75;
                     margin:0;
                     font-size:14px;
@@ -819,7 +874,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
                     padding-bottom:0;
                 }
                 .ctm-mini-metric span{
-                    color:#92b4cb;
+                    color:#ffffff;
                 }
                 .ctm-mini-metric strong{
                     color:#33d0ff;

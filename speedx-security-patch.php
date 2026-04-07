@@ -620,6 +620,56 @@ if (!class_exists('SpeedX_Security_Patch')) {
                     background:rgba(20,76,43,.95) !important;
                     color:#ffffff !important;
                 }
+                .ctm-attack-table-wrap{
+                    overflow:auto;
+                    border:1px solid rgba(82,197,255,.13);
+                    border-radius:14px;
+                }
+                .ctm-attack-table{
+                    width:100%;
+                    border-collapse:collapse;
+                    min-width:700px;
+                    background:rgba(5,14,27,.92);
+                }
+                .ctm-attack-table th,
+                .ctm-attack-table td{
+                    text-align:left;
+                    padding:11px 12px;
+                    border-bottom:1px solid rgba(82,197,255,.1);
+                    color:#cbe8fb;
+                    font-size:13px;
+                    vertical-align:top;
+                }
+                .ctm-attack-table th{
+                    color:#7fd3fb;
+                    font-size:12px;
+                    text-transform:uppercase;
+                    letter-spacing:.05em;
+                    background:rgba(11,28,52,.95);
+                }
+                .ctm-attack-table tr:last-child td{
+                    border-bottom:0;
+                }
+                .ctm-attack-table code{
+                    color:#9fe2ff;
+                    background:transparent;
+                    padding:0;
+                }
+                .ctm-resolve-btn{
+                    min-width:34px;
+                    height:30px;
+                    line-height:1;
+                    padding:0;
+                    border-radius:8px;
+                    border:1px solid rgba(84,206,132,.45) !important;
+                    color:#8fffc5 !important;
+                    background:rgba(15,57,33,.8) !important;
+                    font-weight:700;
+                }
+                .ctm-resolve-btn:hover{
+                    background:rgba(20,76,43,.95) !important;
+                    color:#ffffff !important;
+                }
                 .ctm-highlight-row{
                     margin-top:14px;
                     display:flex;

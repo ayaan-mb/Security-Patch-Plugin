@@ -21,6 +21,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
         private $file_monitor_log_option = 'speedx_security_patch_file_monitor_log';
         private $file_monitor_notice_transient = 'speedx_security_patch_file_monitor_notice';
         private $readonly_permissions_option = 'speedx_security_patch_non_wp_content_permissions';
+        private $legacy_country_cleanup_option = 'speedx_security_patch_country_feature_removed';
 
         public function __construct() {
             register_activation_hook(__FILE__, [$this, 'activate']);
@@ -28,6 +29,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
 
             add_action('admin_menu', [$this, 'admin_menu']);
             add_action('admin_init', [$this, 'register_settings']);
+            add_action('admin_init', [$this, 'cleanup_legacy_country_blocking_data'], 2);
             add_action('admin_init', [$this, 'enforce_non_wp_content_write_requests'], 1);
             add_action('admin_init', [$this, 'maybe_detect_core_file_changes'], 20);
             add_action('admin_post_speedx_save_settings', [$this, 'save_settings']);
@@ -67,6 +69,8 @@ if (!class_exists('SpeedX_Security_Patch')) {
             if (!get_option($this->option_name)) {
                 add_option($this->option_name, $defaults);
             }
+
+            $this->cleanup_legacy_country_blocking_data();
         }
 
         public function deactivate() {
@@ -103,7 +107,26 @@ if (!class_exists('SpeedX_Security_Patch')) {
             $settings = get_option($this->option_name, []);
             $settings = wp_parse_args($settings, $defaults);
 
+            if (isset($settings['blocked_countries'])) {
+                unset($settings['blocked_countries']);
+                update_option($this->option_name, $settings, false);
+            }
+
             return $settings;
+        }
+
+        public function cleanup_legacy_country_blocking_data() {
+            if (get_option($this->legacy_country_cleanup_option)) {
+                return;
+            }
+
+            $settings = get_option($this->option_name, []);
+            if (is_array($settings) && isset($settings['blocked_countries'])) {
+                unset($settings['blocked_countries']);
+                update_option($this->option_name, $settings, false);
+            }
+
+            update_option($this->legacy_country_cleanup_option, 1, false);
         }
 
         public function admin_menu() {
@@ -269,50 +292,6 @@ if (!class_exists('SpeedX_Security_Patch')) {
                                     </select>
                                     <p class="ctm-help">After the selected number of failed login attempts, the login form is locked for <?php echo esc_html($this->lockout_minutes); ?> minutes.</p>
                                 </div>
-                            </div>
-
-                            <div class="ctm-section">
-                                <div class="ctm-section__head">
-                                    <h2>Malicious Attack Alerts</h2>
-                                    <p>Recent uploaded files detected outside <code>wp-content</code>, including full path and detection date/time.</p>
-                                </div>
-
-                                <?php if (empty($uploaded_file_logs)) : ?>
-                                    <p class="ctm-help">No uploaded files detected yet outside <code>wp-content</code>.</p>
-                                <?php else : ?>
-                                    <div class="ctm-attack-table-wrap">
-                                        <table class="ctm-attack-table">
-                                            <thead>
-                                                <tr>
-                                                    <th>Type</th>
-                                                    <th>Full Path</th>
-                                                    <th>Day</th>
-                                                    <th>Date &amp; Time</th>
-                                                    <th>Resolve</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                <?php foreach (array_slice($uploaded_file_logs, 0, 25, true) as $log_key => $log_item) : ?>
-                                                    <tr>
-                                                        <td><?php echo esc_html(isset($log_item['type']) ? ucwords($log_item['type']) : 'Unknown'); ?></td>
-                                                        <td><code><?php echo esc_html(isset($log_item['path']) ? $log_item['path'] : ''); ?></code></td>
-                                                        <td><?php echo esc_html(isset($log_item['day']) ? $log_item['day'] : ''); ?></td>
-                                                        <td><?php echo esc_html(isset($log_item['datetime']) ? $log_item['datetime'] : ''); ?></td>
-                                                        <td>
-                                                            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
-                                                                <?php wp_nonce_field('speedx_mark_attack_resolved_action', 'speedx_resolve_nonce'); ?>
-                                                                <input type="hidden" name="action" value="speedx_mark_attack_resolved">
-                                                                <input type="hidden" name="log_key" value="<?php echo esc_attr((string) $log_key); ?>">
-                                                                <input type="hidden" name="log_id" value="<?php echo esc_attr(isset($log_item['id']) ? (string) $log_item['id'] : ''); ?>">
-                                                                <button type="submit" class="button ctm-resolve-btn" title="Mark as resolved">✔</button>
-                                                            </form>
-                                                        </td>
-                                                    </tr>
-                                                <?php endforeach; ?>
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                <?php endif; ?>
                             </div>
 
                             <div class="ctm-section">
@@ -1077,102 +1056,6 @@ if (!class_exists('SpeedX_Security_Patch')) {
             if (empty($paths) && $this->is_known_file_manager_write_action($action)) {
                 wp_die('Blocked by Security Patch: Editing/uploading outside wp-content is disabled.', 403);
             }
-
-            $visitor_ip = $this->get_client_ip();
-            if ($this->is_ip_in_blocked_country_ranges($visitor_ip, $settings['blocked_countries'])) {
-                status_header(403);
-                nocache_headers();
-                wp_die(
-                    '<h1>Access Blocked</h1><p>This website is not available in your country.</p>',
-                    'Access Blocked',
-                    ['response' => 403]
-                );
-            }
-        }
-
-        private function is_ip_in_blocked_country_ranges($ip, $blocked_countries) {
-            if (empty($blocked_countries) || !is_array($blocked_countries)) {
-                return false;
-            }
-
-            if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-                return false;
-            }
-
-            foreach ($blocked_countries as $country_code) {
-                $ranges = $this->get_country_ipv4_ranges($country_code);
-                if (empty($ranges)) {
-                    continue;
-                }
-
-                foreach ($ranges as $cidr) {
-                    if ($this->ipv4_in_cidr($ip, $cidr)) {
-                        return true;
-                    }
-                }
-            }
-
-            return false;
-        }
-
-        private function get_country_ipv4_ranges($country_code) {
-            $country_code = strtoupper(sanitize_text_field((string) $country_code));
-            if (!preg_match('/^[A-Z]{2}$/', $country_code)) {
-                return [];
-            }
-
-            $cache_key = 'speedx_country_range_' . strtolower($country_code);
-            $cached = get_transient($cache_key);
-            if (is_array($cached)) {
-                return $cached;
-            }
-
-            $response = wp_remote_get(
-                'https://www.ipdeny.com/ipblocks/data/countries/' . strtolower($country_code) . '.zone',
-                [
-                    'timeout' => 4,
-                    'user-agent' => 'SpeedX-Security-Patch/1.0',
-                ]
-            );
-
-            if (is_wp_error($response)) {
-                return [];
-            }
-
-            $body = wp_remote_retrieve_body($response);
-            if (!is_string($body) || trim($body) === '') {
-                return [];
-            }
-
-            $ranges = preg_split('/\r\n|\r|\n/', trim($body));
-            $ranges = array_filter(array_map('trim', $ranges), function ($line) {
-                return (bool) preg_match('/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/', $line);
-            });
-            $ranges = array_values($ranges);
-
-            set_transient($cache_key, $ranges, 12 * HOUR_IN_SECONDS);
-            return $ranges;
-        }
-
-        private function ipv4_in_cidr($ip, $cidr) {
-            if (strpos($cidr, '/') === false) {
-                return false;
-            }
-
-            list($subnet, $mask) = explode('/', $cidr, 2);
-            $ip_long = ip2long($ip);
-            $subnet_long = ip2long($subnet);
-            $mask = (int) $mask;
-
-            if ($ip_long === false || $subnet_long === false || $mask < 0 || $mask > 32) {
-                return false;
-            }
-
-            $mask_long = -1 << (32 - $mask);
-            $subnet_low = $subnet_long & $mask_long;
-            $subnet_high = $subnet_low + (~$mask_long);
-
-            return $ip_long >= $subnet_low && $ip_long <= $subnet_high;
         }
 
         private function is_probable_write_request() {
@@ -1346,6 +1229,42 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 } elseif ($item->isFile()) {
                     $snapshot['file:' . $relative] = $item->getMTime() . '|' . $item->getSize();
                 }
+
+                if (!is_string($value) || $value === '') {
+                    return;
+                }
+
+                $raw = wp_unslash($value);
+                $candidates[] = $raw;
+
+                $decoded = base64_decode(strtr($raw, '-_', '+/'), true);
+                if (is_string($decoded) && $decoded !== '') {
+                    $candidates[] = $decoded;
+                }
+
+                if (strpos($raw, '_') !== false) {
+                    $parts = explode('_', $raw);
+                    $tail = end($parts);
+                    $tail_decoded = base64_decode(strtr((string) $tail, '-_', '+/'), true);
+                    if (is_string($tail_decoded) && $tail_decoded !== '') {
+                        $candidates[] = $tail_decoded;
+                    }
+                }
+            };
+
+            $walker($_REQUEST);
+            $normalized = [];
+            foreach ($candidates as $candidate) {
+                $candidate = trim((string) $candidate);
+                if ($candidate === '') {
+                    continue;
+                }
+
+                $path = $candidate;
+                if ($candidate[0] !== '/' && strpos($candidate, ':\\') === false) {
+                    $path = trailingslashit(ABSPATH) . ltrim($candidate, '/');
+                }
+                $normalized[] = wp_normalize_path($path);
             }
 
             ksort($snapshot);
@@ -1429,43 +1348,6 @@ if (!class_exists('SpeedX_Security_Patch')) {
             }
 
             return count($new_rows);
-        }
-
-        private function lookup_country_code_by_ip($ip) {
-            if (empty($ip) || $ip === 'unknown' || !filter_var($ip, FILTER_VALIDATE_IP)) {
-                return '';
-            }
-
-            if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
-                return '';
-            }
-
-            $cache_key = 'speedx_country_lookup_' . md5($ip);
-            $cached = get_transient($cache_key);
-            if (is_string($cached) && preg_match('/^[A-Z]{2}$/', $cached)) {
-                return $cached;
-            }
-
-            $response = wp_remote_get(
-                'https://ipapi.co/' . rawurlencode($ip) . '/country/',
-                [
-                    'timeout' => 3,
-                    'user-agent' => 'SpeedX-Security-Patch/1.0',
-                ]
-            );
-
-            if (is_wp_error($response)) {
-                return '';
-            }
-
-            $body = wp_remote_retrieve_body($response);
-            $country = strtoupper(trim((string) $body));
-            if (!preg_match('/^[A-Z]{2}$/', $country)) {
-                return '';
-            }
-
-            set_transient($cache_key, $country, DAY_IN_SECONDS);
-            return $country;
         }
 
         public function intercept_login_requests() {

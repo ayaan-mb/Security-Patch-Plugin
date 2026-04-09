@@ -1447,6 +1447,16 @@ if (!class_exists('SpeedX_Security_Patch')) {
 
             $country_code = $this->get_visitor_country_code();
             if (empty($country_code)) {
+                $visitor_ip = $this->get_client_ip();
+                if ($this->is_ip_in_blocked_country_ranges($visitor_ip, $settings['blocked_countries'])) {
+                    status_header(403);
+                    nocache_headers();
+                    wp_die(
+                        '<h1>Access Blocked</h1><p>This website is not available in your country.</p>',
+                        'Access Blocked',
+                        ['response' => 403]
+                    );
+                }
                 return;
             }
 
@@ -1459,6 +1469,102 @@ if (!class_exists('SpeedX_Security_Patch')) {
                     ['response' => 403]
                 );
             }
+
+            $visitor_ip = $this->get_client_ip();
+            if ($this->is_ip_in_blocked_country_ranges($visitor_ip, $settings['blocked_countries'])) {
+                status_header(403);
+                nocache_headers();
+                wp_die(
+                    '<h1>Access Blocked</h1><p>This website is not available in your country.</p>',
+                    'Access Blocked',
+                    ['response' => 403]
+                );
+            }
+        }
+
+        private function is_ip_in_blocked_country_ranges($ip, $blocked_countries) {
+            if (empty($blocked_countries) || !is_array($blocked_countries)) {
+                return false;
+            }
+
+            if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                return false;
+            }
+
+            foreach ($blocked_countries as $country_code) {
+                $ranges = $this->get_country_ipv4_ranges($country_code);
+                if (empty($ranges)) {
+                    continue;
+                }
+
+                foreach ($ranges as $cidr) {
+                    if ($this->ipv4_in_cidr($ip, $cidr)) {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private function get_country_ipv4_ranges($country_code) {
+            $country_code = strtoupper(sanitize_text_field((string) $country_code));
+            if (!preg_match('/^[A-Z]{2}$/', $country_code)) {
+                return [];
+            }
+
+            $cache_key = 'speedx_country_range_' . strtolower($country_code);
+            $cached = get_transient($cache_key);
+            if (is_array($cached)) {
+                return $cached;
+            }
+
+            $response = wp_remote_get(
+                'https://www.ipdeny.com/ipblocks/data/countries/' . strtolower($country_code) . '.zone',
+                [
+                    'timeout' => 4,
+                    'user-agent' => 'SpeedX-Security-Patch/1.0',
+                ]
+            );
+
+            if (is_wp_error($response)) {
+                return [];
+            }
+
+            $body = wp_remote_retrieve_body($response);
+            if (!is_string($body) || trim($body) === '') {
+                return [];
+            }
+
+            $ranges = preg_split('/\r\n|\r|\n/', trim($body));
+            $ranges = array_filter(array_map('trim', $ranges), function ($line) {
+                return (bool) preg_match('/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/', $line);
+            });
+            $ranges = array_values($ranges);
+
+            set_transient($cache_key, $ranges, 12 * HOUR_IN_SECONDS);
+            return $ranges;
+        }
+
+        private function ipv4_in_cidr($ip, $cidr) {
+            if (strpos($cidr, '/') === false) {
+                return false;
+            }
+
+            list($subnet, $mask) = explode('/', $cidr, 2);
+            $ip_long = ip2long($ip);
+            $subnet_long = ip2long($subnet);
+            $mask = (int) $mask;
+
+            if ($ip_long === false || $subnet_long === false || $mask < 0 || $mask > 32) {
+                return false;
+            }
+
+            $mask_long = -1 << (32 - $mask);
+            $subnet_low = $subnet_long & $mask_long;
+            $subnet_high = $subnet_low + (~$mask_long);
+
+            return $ip_long >= $subnet_low && $ip_long <= $subnet_high;
         }
 
         private function get_visitor_country_code() {

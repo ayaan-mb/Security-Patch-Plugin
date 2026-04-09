@@ -108,6 +108,44 @@ if (!class_exists('SpeedX_Security_Patch')) {
             return $settings;
         }
 
+        private function cleanup_legacy_country_blocking_data() {
+            $settings = get_option($this->option_name, []);
+            if (is_array($settings)) {
+                $legacy_keys = [
+                    'country_blocking_enabled',
+                    'country_block_enabled',
+                    'blocked_countries',
+                    'country_blocklist',
+                    'country_allowlist',
+                    'allowed_countries',
+                    'country_search',
+                ];
+
+                $has_changes = false;
+                foreach ($legacy_keys as $legacy_key) {
+                    if (array_key_exists($legacy_key, $settings)) {
+                        unset($settings[$legacy_key]);
+                        $has_changes = true;
+                    }
+                }
+
+                if ($has_changes) {
+                    update_option($this->option_name, $settings);
+                }
+            }
+
+            $legacy_options = [
+                'speedx_security_patch_country_blocking',
+                'speedx_security_patch_blocked_countries',
+                'speedx_country_blocking',
+                'speedx_blocked_countries',
+            ];
+
+            foreach ($legacy_options as $legacy_option) {
+                delete_option($legacy_option);
+            }
+        }
+
         public function admin_menu() {
             add_menu_page(
                 'ClickTrack Security Patch',
@@ -372,13 +410,6 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 }
                 .speedx-security-wrap .notice{
                     margin-left:0;
-                }
-                .speedx-country-box,
-                .ctm-country-toolbar,
-                #speedx-country-search,
-                #speedx-select-all-visible,
-                #speedx-clear-all-countries{
-                    display:none !important;
                 }
                 .ctm-hero{
                     max-width:none;
@@ -805,19 +836,6 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 }
             </style>
 
-            <script>
-                document.addEventListener('DOMContentLoaded', function () {
-                    var sectionHeads = document.querySelectorAll('.ctm-section__head h2');
-                    sectionHeads.forEach(function (heading) {
-                        if ((heading.textContent || '').trim().toLowerCase() === 'country blocking') {
-                            var section = heading.closest('.ctm-section');
-                            if (section) {
-                                section.remove();
-                            }
-                        }
-                    });
-                });
-            </script>
             <?php
         }
 
@@ -846,6 +864,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
             ];
 
             update_option($this->option_name, $new_settings);
+            $this->cleanup_legacy_country_blocking_data();
 
             if (!empty($new_settings['protect_wp_config_htaccess'])) {
                 $this->add_htaccess_rule();

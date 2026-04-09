@@ -1,6 +1,6 @@
 <?php
 /**
- * Plugin Name: Security Patch by Click Track Marketing
+ * Plugin Name: Security Patch By Click Track Marketing
  * Description: Custom login URL changer and security patch manager for WordPress.
  * Version: 1.3.0
  * Author: Click Track Marketing
@@ -16,6 +16,11 @@ if (!class_exists('SpeedX_Security_Patch')) {
         private $option_name = 'speedx_security_patch_settings';
         private $htaccess_marker = 'SpeedX Security Patch - wp-config Protection';
         private $lockout_minutes = 30;
+        private $file_monitor_hash_option = 'speedx_security_patch_file_monitor_hash';
+        private $file_monitor_snapshot_option = 'speedx_security_patch_file_monitor_snapshot';
+        private $file_monitor_log_option = 'speedx_security_patch_file_monitor_log';
+        private $file_monitor_notice_transient = 'speedx_security_patch_file_monitor_notice';
+        private $readonly_permissions_option = 'speedx_security_patch_non_wp_content_permissions';
 
         public function __construct() {
             register_activation_hook(__FILE__, [$this, 'activate']);
@@ -23,13 +28,15 @@ if (!class_exists('SpeedX_Security_Patch')) {
 
             add_action('admin_menu', [$this, 'admin_menu']);
             add_action('admin_init', [$this, 'register_settings']);
+            add_action('admin_init', [$this, 'enforce_non_wp_content_write_requests'], 1);
+            add_action('admin_init', [$this, 'maybe_detect_core_file_changes'], 20);
             add_action('admin_post_speedx_save_settings', [$this, 'save_settings']);
+            add_action('admin_post_speedx_mark_attack_resolved', [$this, 'mark_attack_resolved']);
             add_action('admin_notices', [$this, 'admin_notices']);
 
             add_action('admin_enqueue_scripts', [$this, 'admin_assets']);
             add_action('admin_head', [$this, 'admin_menu_branding_css']);
 
-            add_action('init', [$this, 'maybe_block_country'], 0);
             add_action('init', [$this, 'intercept_login_requests'], 1);
 
             add_filter('site_url', [$this, 'filter_login_url'], 10, 4);
@@ -52,8 +59,9 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 'custom_login_slug' => 'secure-login',
                 'protect_wp_config_htaccess' => 0,
                 'disallow_file_edit' => 0,
+                'core_file_change_alert' => 0,
+                'lock_non_wp_content_writes' => 0,
                 'login_attempt_limit' => 'none',
-                'blocked_countries' => [],
             ];
 
             if (!get_option($this->option_name)) {
@@ -71,6 +79,15 @@ if (!class_exists('SpeedX_Security_Patch')) {
             if (!empty($settings['disallow_file_edit'])) {
                 $this->remove_wp_config_rule();
             }
+
+            if (!empty($settings['lock_non_wp_content_writes'])) {
+                $this->remove_non_wp_content_lock();
+            }
+
+            delete_transient($this->file_monitor_notice_transient);
+            delete_transient('speedx_security_patch_file_monitor_scan_lock');
+            delete_option($this->file_monitor_snapshot_option);
+            delete_option($this->file_monitor_hash_option);
         }
 
         private function get_settings() {
@@ -78,16 +95,13 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 'custom_login_slug' => 'secure-login',
                 'protect_wp_config_htaccess' => 0,
                 'disallow_file_edit' => 0,
+                'core_file_change_alert' => 0,
+                'lock_non_wp_content_writes' => 0,
                 'login_attempt_limit' => 'none',
-                'blocked_countries' => [],
             ];
 
             $settings = get_option($this->option_name, []);
             $settings = wp_parse_args($settings, $defaults);
-
-            if (!is_array($settings['blocked_countries'])) {
-                $settings['blocked_countries'] = [];
-            }
 
             return $settings;
         }
@@ -138,8 +152,13 @@ if (!class_exists('SpeedX_Security_Patch')) {
 
             $settings = $this->get_settings();
             $custom_login_url = home_url('/' . trim($settings['custom_login_slug'], '/') . '/');
-            $countries = $this->get_country_list();
-            $blocked_count = is_array($settings['blocked_countries']) ? count($settings['blocked_countries']) : 0;
+            $malicious_logs = get_option($this->file_monitor_log_option, []);
+            if (!is_array($malicious_logs)) {
+                $malicious_logs = [];
+            }
+            $uploaded_file_logs = array_filter($malicious_logs, function ($log_item) {
+                return isset($log_item['type']) && $log_item['type'] === 'uploaded file' && empty($log_item['resolved']);
+            });
             ?>
             <div class="wrap speedx-security-wrap">
                 <div class="ctm-hero">
@@ -150,10 +169,6 @@ if (!class_exists('SpeedX_Security_Patch')) {
                             <p>Harden WordPress sites with ClickTrack-style protection, cleaner controls, and a dark premium admin experience.</p>
                         </div>
                         <div class="ctm-stats">
-                            <div class="ctm-stat">
-                                <span class="ctm-stat__value"><?php echo esc_html($blocked_count); ?></span>
-                                <span class="ctm-stat__label">Blocked Countries</span>
-                            </div>
                             <div class="ctm-stat">
                                 <span class="ctm-stat__value"><?php echo esc_html(strtoupper($settings['login_attempt_limit'])); ?></span>
                                 <span class="ctm-stat__label">Login Limit</span>
@@ -215,6 +230,28 @@ if (!class_exists('SpeedX_Security_Patch')) {
                                         <span class="ctm-slider"></span>
                                     </span>
                                 </label>
+
+                                <label class="ctm-toggle-card">
+                                    <span class="ctm-toggle-card__text">
+                                        <strong>Alert on Core File Changes</strong>
+                                        <small>Shows a red admin alert when files outside <code>wp-content</code> are created, removed, or edited.</small>
+                                    </span>
+                                    <span class="ctm-switch">
+                                        <input type="checkbox" name="core_file_change_alert" value="1" <?php checked(!empty($settings['core_file_change_alert'])); ?> />
+                                        <span class="ctm-slider"></span>
+                                    </span>
+                                </label>
+
+                                <label class="ctm-toggle-card">
+                                    <span class="ctm-toggle-card__text">
+                                        <strong>Disable file editing and uploading completely except wp-content</strong>
+                                        <small>Sets files/folders outside <code>wp-content</code> to read-only so they appear greyed out and cannot be edited/uploaded.</small>
+                                    </span>
+                                    <span class="ctm-switch">
+                                        <input type="checkbox" name="lock_non_wp_content_writes" value="1" <?php checked(!empty($settings['lock_non_wp_content_writes'])); ?> />
+                                        <span class="ctm-slider"></span>
+                                    </span>
+                                </label>
                             </div>
 
                             <div class="ctm-section">
@@ -236,24 +273,46 @@ if (!class_exists('SpeedX_Security_Patch')) {
 
                             <div class="ctm-section">
                                 <div class="ctm-section__head">
-                                    <h2>Country Blocking</h2>
-                                    <p>Search countries and tick as many as you want to block. Visitors from selected countries will see a blocked screen.</p>
+                                    <h2>Malicious Attack Alerts</h2>
+                                    <p>Recent uploaded files detected outside <code>wp-content</code>, including full path and detection date/time.</p>
                                 </div>
 
-                                <div class="ctm-country-toolbar">
-                                    <input type="text" id="speedx-country-search" placeholder="Search countries..." />
-                                    <button type="button" class="button button-secondary" id="speedx-select-all-visible">Select Visible</button>
-                                    <button type="button" class="button button-secondary" id="speedx-clear-all-countries">Clear All</button>
-                                </div>
-
-                                <div class="speedx-country-box" id="speedx-country-box">
-                                    <?php foreach ($countries as $code => $name) : ?>
-                                        <label class="speedx-country-item" data-country-text="<?php echo esc_attr(strtolower($name . ' ' . $code)); ?>">
-                                            <input type="checkbox" name="blocked_countries[]" value="<?php echo esc_attr($code); ?>" <?php checked(in_array($code, $settings['blocked_countries'], true)); ?> />
-                                            <span><?php echo esc_html($name . ' (' . $code . ')'); ?></span>
-                                        </label>
-                                    <?php endforeach; ?>
-                                </div>
+                                <?php if (empty($uploaded_file_logs)) : ?>
+                                    <p class="ctm-help">No uploaded files detected yet outside <code>wp-content</code>.</p>
+                                <?php else : ?>
+                                    <div class="ctm-attack-table-wrap">
+                                        <table class="ctm-attack-table">
+                                            <thead>
+                                                <tr>
+                                                    <th>Type</th>
+                                                    <th>Full Path</th>
+                                                    <th>Day</th>
+                                                    <th>Date &amp; Time</th>
+                                                    <th>Resolve</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <?php foreach (array_slice($uploaded_file_logs, 0, 25, true) as $log_key => $log_item) : ?>
+                                                    <tr>
+                                                        <td><?php echo esc_html(isset($log_item['type']) ? ucwords($log_item['type']) : 'Unknown'); ?></td>
+                                                        <td><code><?php echo esc_html(isset($log_item['path']) ? $log_item['path'] : ''); ?></code></td>
+                                                        <td><?php echo esc_html(isset($log_item['day']) ? $log_item['day'] : ''); ?></td>
+                                                        <td><?php echo esc_html(isset($log_item['datetime']) ? $log_item['datetime'] : ''); ?></td>
+                                                        <td>
+                                                            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                                                                <?php wp_nonce_field('speedx_mark_attack_resolved_action', 'speedx_resolve_nonce'); ?>
+                                                                <input type="hidden" name="action" value="speedx_mark_attack_resolved">
+                                                                <input type="hidden" name="log_key" value="<?php echo esc_attr((string) $log_key); ?>">
+                                                                <input type="hidden" name="log_id" value="<?php echo esc_attr(isset($log_item['id']) ? (string) $log_item['id'] : ''); ?>">
+                                                                <button type="submit" class="button ctm-resolve-btn" title="Mark as resolved">✔</button>
+                                                            </form>
+                                                        </td>
+                                                    </tr>
+                                                <?php endforeach; ?>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                <?php endif; ?>
                             </div>
 
                             <div class="ctm-submit-row">
@@ -264,32 +323,22 @@ if (!class_exists('SpeedX_Security_Patch')) {
 
                     <div class="ctm-card ctm-card--side">
                         <div class="ctm-side-block">
-                            <h3>Brand Theme</h3>
-                            <p>Styled to match the dark ClickTrack Marketing look with electric blue highlights, glossy cards, and a cleaner premium admin feel.</p>
-                        </div>
-
-                        <div class="ctm-side-block">
-                            <h3>Quick Notes</h3>
-                            <ul>
-                                <li>All existing plugin functionality remains unchanged.</li>
-                                <li>Sidebar shield icon is now branded blue.</li>
-                                <li>Country blocking still requires a country-code header from your server or CDN.</li>
-                            </ul>
-                        </div>
-
-                        <div class="ctm-side-block">
                             <h3>Live Summary</h3>
                             <div class="ctm-mini-metric">
                                 <span>Custom Login</span>
                                 <strong><?php echo esc_html('/' . trim($settings['custom_login_slug'], '/')); ?></strong>
                             </div>
                             <div class="ctm-mini-metric">
-                                <span>Blocked Countries</span>
-                                <strong><?php echo esc_html($blocked_count); ?></strong>
-                            </div>
-                            <div class="ctm-mini-metric">
                                 <span>Login Attempts</span>
                                 <strong><?php echo esc_html($settings['login_attempt_limit']); ?></strong>
+                            </div>
+                            <div class="ctm-mini-metric">
+                                <span>Core File Alert</span>
+                                <strong><?php echo !empty($settings['core_file_change_alert']) ? 'On' : 'Off'; ?></strong>
+                            </div>
+                            <div class="ctm-mini-metric">
+                                <span>Non-wp-content Lock</span>
+                                <strong><?php echo !empty($settings['lock_non_wp_content_writes']) ? 'On' : 'Off'; ?></strong>
                             </div>
                         </div>
                     </div>
@@ -297,9 +346,23 @@ if (!class_exists('SpeedX_Security_Patch')) {
             </div>
 
             <style>
+                @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap');
+                body.toplevel_page_speedx-security-patch{
+                    background:#0b1119;
+                }
+                body.toplevel_page_speedx-security-patch #wpcontent{
+                    background:linear-gradient(180deg, #0b1119 0%, #090f17 100%);
+                }
+                body.toplevel_page_speedx-security-patch #wpbody-content{
+                    padding-bottom:24px;
+                }
                 .speedx-security-wrap{
-                    margin: 18px 20px 0 2px;
+                    margin:18px 12px 0 2px;
                     color:#d8ecff;
+                    font-family: Poppins, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+                }
+                .speedx-security-wrap,
+                .speedx-security-wrap *{
                     font-family: Poppins, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
                 }
                 .speedx-security-wrap *, .speedx-security-wrap *:before, .speedx-security-wrap *:after{
@@ -309,7 +372,8 @@ if (!class_exists('SpeedX_Security_Patch')) {
                     margin-left:0;
                 }
                 .ctm-hero{
-                    max-width:1180px;
+                    max-width:none;
+                    width:100%;
                     padding:28px;
                     border-radius:22px;
                     background:
@@ -366,8 +430,8 @@ if (!class_exists('SpeedX_Security_Patch')) {
                     margin:0;
                     font-size:15px;
                     line-height:1.7;
-                    color:#a7c7df;
-                    max-width:720px;
+                    color:#ffffff;
+                    max-width:860px;
                 }
                 .ctm-stats{
                     display:flex;
@@ -392,16 +456,17 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 }
                 .ctm-stat__label{
                     display:block;
-                    color:#9ec0da;
+                    color:#ffffff;
                     font-size:12px;
                     text-transform:uppercase;
                     letter-spacing:.06em;
                 }
                 .ctm-card-grid{
-                    max-width:1180px;
+                    max-width:none;
+                    width:100%;
                     margin-top:22px;
                     display:grid;
-                    grid-template-columns:minmax(0,1fr) 320px;
+                    grid-template-columns:minmax(0,1fr) minmax(300px, 26%);
                     gap:22px;
                     align-items:start;
                 }
@@ -437,7 +502,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 }
                 .ctm-section__head p{
                     margin:0;
-                    color:#9dc0d9;
+                    color:#ffffff;
                     font-size:14px;
                     line-height:1.7;
                 }
@@ -487,7 +552,57 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 }
                 .ctm-help{
                     margin:10px 0 0;
-                    color:#89abc2;
+                    color:#ffffff;
+                }
+                .ctm-attack-table-wrap{
+                    overflow:auto;
+                    border:1px solid rgba(82,197,255,.13);
+                    border-radius:14px;
+                }
+                .ctm-attack-table{
+                    width:100%;
+                    border-collapse:collapse;
+                    min-width:700px;
+                    background:rgba(5,14,27,.92);
+                }
+                .ctm-attack-table th,
+                .ctm-attack-table td{
+                    text-align:left;
+                    padding:11px 12px;
+                    border-bottom:1px solid rgba(82,197,255,.1);
+                    color:#cbe8fb;
+                    font-size:13px;
+                    vertical-align:top;
+                }
+                .ctm-attack-table th{
+                    color:#7fd3fb;
+                    font-size:12px;
+                    text-transform:uppercase;
+                    letter-spacing:.05em;
+                    background:rgba(11,28,52,.95);
+                }
+                .ctm-attack-table tr:last-child td{
+                    border-bottom:0;
+                }
+                .ctm-attack-table code{
+                    color:#9fe2ff;
+                    background:transparent;
+                    padding:0;
+                }
+                .ctm-resolve-btn{
+                    min-width:34px;
+                    height:30px;
+                    line-height:1;
+                    padding:0;
+                    border-radius:8px;
+                    border:1px solid rgba(84,206,132,.45) !important;
+                    color:#8fffc5 !important;
+                    background:rgba(15,57,33,.8) !important;
+                    font-weight:700;
+                }
+                .ctm-resolve-btn:hover{
+                    background:rgba(20,76,43,.95) !important;
+                    color:#ffffff !important;
                 }
                 .ctm-highlight-row{
                     margin-top:14px;
@@ -539,7 +654,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 }
                 .ctm-toggle-card__text small{
                     display:block;
-                    color:#95b7cf;
+                    color:#ffffff;
                     line-height:1.7;
                     font-size:13px;
                 }
@@ -580,16 +695,6 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 .ctm-switch input:checked + .ctm-slider:before{
                     transform:translateX(26px);
                 }
-                .ctm-country-toolbar{
-                    display:flex;
-                    gap:10px;
-                    align-items:center;
-                    flex-wrap:wrap;
-                    margin-bottom:14px;
-                }
-                .ctm-country-toolbar input{
-                    min-width:260px;
-                }
                 .speedx-security-wrap .button,
                 .speedx-security-wrap .button-secondary,
                 .speedx-security-wrap .button-primary{
@@ -618,41 +723,6 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 .speedx-security-wrap .button-primary:hover{
                     filter:brightness(1.06);
                 }
-                .speedx-country-box{
-                    width:100%;
-                    min-height:330px;
-                    max-height:460px;
-                    overflow:auto;
-                    border:1px solid rgba(84,198,255,.18);
-                    border-radius:18px;
-                    background:linear-gradient(180deg, #06111d, #08192b);
-                    padding:16px;
-                    display:grid;
-                    grid-template-columns:repeat(3, minmax(220px, 1fr));
-                    gap:10px 16px;
-                }
-                .speedx-country-item{
-                    display:flex;
-                    align-items:flex-start;
-                    gap:10px;
-                    padding:11px 12px;
-                    border:1px solid rgba(255,255,255,.05);
-                    border-radius:12px;
-                    background:rgba(255,255,255,.02);
-                    color:#dff2ff;
-                    cursor:pointer;
-                    line-height:1.5;
-                    transition:.2s ease;
-                }
-                .speedx-country-item:hover{
-                    border-color:rgba(34,206,255,.24);
-                    background:rgba(34,206,255,.05);
-                }
-                .speedx-country-item input{
-                    margin-top:3px;
-                    accent-color:#19c6ff;
-                    flex:0 0 auto;
-                }
                 .ctm-submit-row{
                     display:flex;
                     justify-content:flex-start;
@@ -672,7 +742,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 }
                 .ctm-side-block p,
                 .ctm-side-block li{
-                    color:#a6c5db;
+                    color:#ffffff;
                     line-height:1.75;
                     margin:0;
                     font-size:14px;
@@ -693,7 +763,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
                     padding-bottom:0;
                 }
                 .ctm-mini-metric span{
-                    color:#92b4cb;
+                    color:#ffffff;
                 }
                 .ctm-mini-metric strong{
                     color:#33d0ff;
@@ -712,15 +782,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
                         position:static;
                     }
                 }
-                @media (max-width: 900px){
-                    .speedx-country-box{
-                        grid-template-columns:repeat(2, minmax(220px, 1fr));
-                    }
-                }
                 @media (max-width: 680px){
-                    .speedx-country-box{
-                        grid-template-columns:1fr;
-                    }
                     .ctm-hero{
                         padding:22px;
                     }
@@ -736,40 +798,6 @@ if (!class_exists('SpeedX_Security_Patch')) {
 
             <script>
                 document.addEventListener('DOMContentLoaded', function () {
-                    var search = document.getElementById('speedx-country-search');
-                    var items = document.querySelectorAll('.speedx-country-item');
-                    var selectVisibleBtn = document.getElementById('speedx-select-all-visible');
-                    var clearAllBtn = document.getElementById('speedx-clear-all-countries');
-
-                    if (search) {
-                        search.addEventListener('input', function () {
-                            var term = this.value.toLowerCase().trim();
-                            items.forEach(function (item) {
-                                var text = item.getAttribute('data-country-text') || '';
-                                item.style.display = text.indexOf(term) !== -1 ? '' : 'none';
-                            });
-                        });
-                    }
-
-                    if (selectVisibleBtn) {
-                        selectVisibleBtn.addEventListener('click', function () {
-                            items.forEach(function (item) {
-                                if (item.style.display !== 'none') {
-                                    var checkbox = item.querySelector('input[type="checkbox"]');
-                                    if (checkbox) checkbox.checked = true;
-                                }
-                            });
-                        });
-                    }
-
-                    if (clearAllBtn) {
-                        clearAllBtn.addEventListener('click', function () {
-                            items.forEach(function (item) {
-                                var checkbox = item.querySelector('input[type="checkbox"]');
-                                if (checkbox) checkbox.checked = false;
-                            });
-                        });
-                    }
                 });
             </script>
             <?php
@@ -790,24 +818,13 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 $login_attempt_limit = 'none';
             }
 
-            $countries = $this->get_country_list();
-            $blocked_countries = [];
-            if (isset($_POST['blocked_countries']) && is_array($_POST['blocked_countries'])) {
-                foreach (wp_unslash($_POST['blocked_countries']) as $country_code) {
-                    $country_code = strtoupper(sanitize_text_field($country_code));
-                    if (isset($countries[$country_code])) {
-                        $blocked_countries[] = $country_code;
-                    }
-                }
-            }
-            $blocked_countries = array_values(array_unique($blocked_countries));
-
             $new_settings = [
                 'custom_login_slug' => $new_slug,
                 'protect_wp_config_htaccess' => isset($_POST['protect_wp_config_htaccess']) ? 1 : 0,
                 'disallow_file_edit' => isset($_POST['disallow_file_edit']) ? 1 : 0,
+                'core_file_change_alert' => isset($_POST['core_file_change_alert']) ? 1 : 0,
+                'lock_non_wp_content_writes' => isset($_POST['lock_non_wp_content_writes']) ? 1 : 0,
                 'login_attempt_limit' => $login_attempt_limit,
-                'blocked_countries' => $blocked_countries,
             ];
 
             update_option($this->option_name, $new_settings);
@@ -824,9 +841,31 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 $this->remove_wp_config_rule();
             }
 
+            if (!empty($new_settings['lock_non_wp_content_writes'])) {
+                $this->apply_non_wp_content_lock();
+            } else {
+                $this->remove_non_wp_content_lock();
+            }
+
             if ($login_attempt_limit === 'none') {
                 delete_transient($this->get_attempts_key());
                 delete_transient($this->get_lockout_key());
+            }
+
+            if (!empty($new_settings['core_file_change_alert'])) {
+                if (!get_option($this->file_monitor_snapshot_option)) {
+                    $baseline_snapshot = $this->collect_core_file_snapshot();
+                    if (!empty($baseline_snapshot)) {
+                        update_option($this->file_monitor_snapshot_option, $baseline_snapshot, false);
+                        update_option($this->file_monitor_hash_option, $this->hash_snapshot($baseline_snapshot), false);
+                    }
+                }
+            } else {
+                delete_option($this->file_monitor_hash_option);
+                delete_option($this->file_monitor_snapshot_option);
+                delete_option($this->file_monitor_log_option);
+                delete_transient($this->file_monitor_notice_transient);
+                delete_transient('speedx_security_patch_file_monitor_scan_lock');
             }
 
             $redirect_url = add_query_arg(
@@ -842,6 +881,15 @@ if (!class_exists('SpeedX_Security_Patch')) {
         }
 
         public function admin_notices() {
+            if (!current_user_can('manage_options')) {
+                return;
+            }
+
+            $monitor_notice = get_transient($this->file_monitor_notice_transient);
+            if (!empty($monitor_notice)) {
+                echo '<div class="notice notice-error"><p><strong>Security Alert:</strong> ' . esc_html($monitor_notice) . '</p></div>';
+            }
+
             if (!isset($_GET['page']) || $_GET['page'] !== 'speedx-security-patch') {
                 return;
             }
@@ -849,68 +897,398 @@ if (!class_exists('SpeedX_Security_Patch')) {
             if (!empty($_GET['speedx_saved'])) {
                 $settings = $this->get_settings();
                 $login_url = home_url('/' . trim($settings['custom_login_slug'], '/') . '/');
-                $count = is_array($settings['blocked_countries']) ? count($settings['blocked_countries']) : 0;
-                echo '<div class="notice notice-success is-dismissible"><p><strong>Settings saved.</strong> Login URL: <a href="' . esc_url($login_url) . '" target="_blank">' . esc_html($login_url) . '</a> | Blocked Countries: ' . esc_html((string) $count) . '</p></div>';
-
-                if (!$this->can_detect_country_code()) {
-                    echo '<div class="notice notice-warning"><p><strong>Country blocking note:</strong> This feature works when your server or CDN provides a visitor country code header such as <code>CF-IPCountry</code> or <code>GEOIP_COUNTRY_CODE</code>. If your hosting stack does not provide country detection, country blocking will not trigger.</p></div>';
-                }
+                echo '<div class="notice notice-success is-dismissible"><p><strong>Settings saved.</strong> Login URL: <a href="' . esc_url($login_url) . '" target="_blank">' . esc_html($login_url) . '</a></p></div>';
             }
         }
 
-        public function maybe_block_country() {
-            if (is_admin() || (defined('WP_CLI') && WP_CLI)) {
+        public function mark_attack_resolved() {
+            if (!current_user_can('manage_options')) {
+                wp_die('Unauthorized access.');
+            }
+
+            check_admin_referer('speedx_mark_attack_resolved_action', 'speedx_resolve_nonce');
+
+            $log_key = isset($_POST['log_key']) ? sanitize_text_field(wp_unslash($_POST['log_key'])) : '';
+            $log_id = isset($_POST['log_id']) ? sanitize_text_field(wp_unslash($_POST['log_id'])) : '';
+            $logs = get_option($this->file_monitor_log_option, []);
+
+            if (is_array($logs)) {
+                foreach ($logs as $index => $entry) {
+                    $entry_id = isset($entry['id']) ? (string) $entry['id'] : '';
+                    if ((string) $index === (string) $log_key || (!empty($log_id) && $entry_id === $log_id)) {
+                        $logs[$index]['resolved'] = 1;
+                        break;
+                    }
+                }
+                update_option($this->file_monitor_log_option, $logs, false);
+            }
+
+            $redirect_url = add_query_arg(
+                [
+                    'page' => 'speedx-security-patch',
+                ],
+                admin_url('admin.php')
+            );
+
+            wp_safe_redirect($redirect_url);
+            exit;
+        }
+
+        private function apply_non_wp_content_lock() {
+            if (!function_exists('chmod')) {
+                return;
+            }
+
+            $root_path = wp_normalize_path(trailingslashit(ABSPATH));
+            $excluded_path = wp_normalize_path($root_path . 'wp-content' . DIRECTORY_SEPARATOR);
+            $permission_map = [];
+
+            $root_current_perms = @fileperms($root_path);
+            if ($root_current_perms !== false) {
+                $permission_map[$root_path] = substr(sprintf('%o', $root_current_perms), -4);
+            }
+            @chmod($root_path, 0555);
+
+            try {
+                $iterator = new RecursiveIteratorIterator(
+                    new RecursiveDirectoryIterator($root_path, FilesystemIterator::SKIP_DOTS),
+                    RecursiveIteratorIterator::SELF_FIRST
+                );
+            } catch (Exception $e) {
+                return;
+            }
+
+            foreach ($iterator as $item) {
+                $pathname = wp_normalize_path($item->getPathname());
+                if (strpos($pathname, $excluded_path) === 0 || is_link($pathname)) {
+                    continue;
+                }
+
+                $relative = str_replace($root_path, '', $pathname);
+                if ($relative === '') {
+                    continue;
+                }
+
+                $current_perms = @fileperms($pathname);
+                if ($current_perms !== false) {
+                    $permission_map[$pathname] = substr(sprintf('%o', $current_perms), -4);
+                }
+
+                if ($item->isDir()) {
+                    @chmod($pathname, 0555);
+                } elseif ($item->isFile()) {
+                    @chmod($pathname, 0444);
+                }
+            }
+
+            update_option($this->readonly_permissions_option, $permission_map, false);
+        }
+
+        private function remove_non_wp_content_lock() {
+            if (!function_exists('chmod')) {
+                return;
+            }
+
+            $permission_map = get_option($this->readonly_permissions_option, []);
+            if (!is_array($permission_map) || empty($permission_map)) {
+                return;
+            }
+
+            foreach ($permission_map as $pathname => $mode) {
+                if (!file_exists($pathname)) {
+                    continue;
+                }
+                @chmod($pathname, octdec((string) $mode));
+            }
+
+            delete_option($this->readonly_permissions_option);
+        }
+
+        public function enforce_non_wp_content_write_requests() {
+            if (!is_admin() || strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET')) !== 'POST') {
                 return;
             }
 
             $settings = $this->get_settings();
-            if (empty($settings['blocked_countries']) || !is_array($settings['blocked_countries'])) {
+            if (empty($settings['lock_non_wp_content_writes'])) {
                 return;
             }
 
-            $country_code = $this->get_visitor_country_code();
-            if (empty($country_code)) {
+            $action = isset($_REQUEST['action']) ? sanitize_text_field(wp_unslash($_REQUEST['action'])) : '';
+            if (in_array($action, ['speedx_save_settings', 'speedx_mark_attack_resolved'], true)) {
                 return;
             }
 
-            if (in_array($country_code, $settings['blocked_countries'], true)) {
-                status_header(403);
-                nocache_headers();
-                wp_die(
-                    '<h1>Access Blocked</h1><p>This website is not available in your country.</p>',
-                    'Access Blocked',
-                    ['response' => 403]
-                );
+            if (!$this->is_probable_write_request()) {
+                return;
             }
-        }
 
-        private function get_visitor_country_code() {
-            $possible_headers = [
-                'HTTP_CF_IPCOUNTRY',
-                'CF-IPCountry',
-                'GEOIP_COUNTRY_CODE',
-                'HTTP_GEOIP_COUNTRY_CODE',
-                'HTTP_X_COUNTRY_CODE',
-                'HTTP_X_GEO_COUNTRY',
-            ];
-
-            foreach ($possible_headers as $header) {
-                if (isset($_SERVER[$header]) && !empty($_SERVER[$header])) {
-                    $country = strtoupper(trim(sanitize_text_field(wp_unslash($_SERVER[$header]))));
-                    if (preg_match('/^[A-Z]{2}$/', $country)) {
-                        return $country;
-                    }
+            $paths = $this->extract_request_paths_for_lock_check();
+            foreach ($paths as $path) {
+                if ($this->is_non_wp_content_path($path)) {
+                    wp_die('Blocked by Security Patch: Editing/uploading outside wp-content is disabled.', 403);
                 }
             }
 
-            return '';
+            if (empty($paths) && $this->is_known_file_manager_write_action($action)) {
+                wp_die('Blocked by Security Patch: Editing/uploading outside wp-content is disabled.', 403);
+            }
         }
 
-        private function can_detect_country_code() {
-            return !empty($this->get_visitor_country_code()) ||
-                isset($_SERVER['HTTP_CF_IPCOUNTRY']) ||
-                isset($_SERVER['GEOIP_COUNTRY_CODE']) ||
-                isset($_SERVER['HTTP_GEOIP_COUNTRY_CODE']);
+        private function is_probable_write_request() {
+            $write_cmds = ['upload', 'put', 'rename', 'rm', 'mkdir', 'mkfile', 'paste', 'duplicate', 'archive', 'extract', 'chmod', 'save'];
+            $write_action_hints = ['upload', 'save', 'edit', 'delete', 'remove', 'rename', 'mkdir', 'mkfile', 'paste', 'extract', 'archive', 'chmod'];
+
+            $cmd = isset($_REQUEST['cmd']) ? strtolower(sanitize_text_field(wp_unslash($_REQUEST['cmd']))) : '';
+            if (in_array($cmd, $write_cmds, true)) {
+                return true;
+            }
+
+            $action = isset($_REQUEST['action']) ? strtolower(sanitize_text_field(wp_unslash($_REQUEST['action']))) : '';
+            foreach ($write_action_hints as $hint) {
+                if ($action !== '' && strpos($action, $hint) !== false) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private function is_known_file_manager_write_action($action) {
+            $action = strtolower((string) $action);
+            $known_actions = [
+                'upload_file_folder_manager',
+                'save_file_folder_manager',
+                'delete_file_folder_manager',
+                'rename_file_folder_manager',
+                'mk_file_folder_manager',
+                'paste_file_folder_manager',
+                'archive_file_folder_manager',
+                'extract_file_folder_manager',
+                'chmod_file_folder_manager',
+                'duplicate_file_folder_manager',
+            ];
+
+            return in_array($action, $known_actions, true);
+        }
+
+        private function extract_request_paths_for_lock_check() {
+            $candidates = [];
+
+            $walker = function ($value) use (&$walker, &$candidates) {
+                if (is_array($value)) {
+                    foreach ($value as $nested) {
+                        $walker($nested);
+                    }
+                    return;
+                }
+
+                if (!is_string($value) || $value === '') {
+                    return;
+                }
+
+                $raw = wp_unslash($value);
+                $candidates[] = $raw;
+
+                $decoded = base64_decode(strtr($raw, '-_', '+/'), true);
+                if (is_string($decoded) && $decoded !== '') {
+                    $candidates[] = $decoded;
+                }
+
+                if (strpos($raw, '_') !== false) {
+                    $parts = explode('_', $raw);
+                    $tail = end($parts);
+                    $tail_decoded = base64_decode(strtr((string) $tail, '-_', '+/'), true);
+                    if (is_string($tail_decoded) && $tail_decoded !== '') {
+                        $candidates[] = $tail_decoded;
+                    }
+                }
+            };
+
+            $walker($_REQUEST);
+            $normalized = [];
+            foreach ($candidates as $candidate) {
+                $candidate = trim((string) $candidate);
+                if ($candidate === '') {
+                    continue;
+                }
+
+                $path = $candidate;
+                if ($candidate[0] !== '/' && strpos($candidate, ':\\') === false) {
+                    $path = trailingslashit(ABSPATH) . ltrim($candidate, '/');
+                }
+                $normalized[] = wp_normalize_path($path);
+            }
+
+            return array_values(array_unique($normalized));
+        }
+
+        private function is_non_wp_content_path($path) {
+            $path = wp_normalize_path((string) $path);
+            $root = wp_normalize_path(trailingslashit(ABSPATH));
+            $allowed = wp_normalize_path($root . 'wp-content' . DIRECTORY_SEPARATOR);
+
+            if (strpos($path, $root) !== 0) {
+                return false;
+            }
+
+            return strpos($path, $allowed) !== 0;
+        }
+
+        public function maybe_detect_core_file_changes() {
+            if (!is_admin() || !current_user_can('manage_options')) {
+                return;
+            }
+
+            $settings = $this->get_settings();
+            if (empty($settings['core_file_change_alert'])) {
+                return;
+            }
+
+            $current_snapshot = $this->collect_core_file_snapshot();
+            if (empty($current_snapshot)) {
+                return;
+            }
+
+            $stored_snapshot = get_option($this->file_monitor_snapshot_option, []);
+            if (!is_array($stored_snapshot) || empty($stored_snapshot)) {
+                update_option($this->file_monitor_snapshot_option, $current_snapshot, false);
+                update_option($this->file_monitor_hash_option, $this->hash_snapshot($current_snapshot), false);
+                return;
+            }
+
+            $current_hash = $this->hash_snapshot($current_snapshot);
+            $stored_hash = (string) get_option($this->file_monitor_hash_option, '');
+
+            if (empty($stored_hash) || !hash_equals($stored_hash, $current_hash)) {
+                $changes = $this->detect_core_snapshot_changes($stored_snapshot, $current_snapshot);
+                $new_count = $this->append_core_file_attack_logs($changes);
+                if ($new_count > 0) {
+                    $timestamp = current_time('mysql');
+                    set_transient(
+                        $this->file_monitor_notice_transient,
+                        $new_count . ' uploaded file(s) detected outside wp-content on ' . $timestamp . '. Check the Malicious Attack Alerts section.',
+                        DAY_IN_SECONDS
+                    );
+                }
+                update_option($this->file_monitor_snapshot_option, $current_snapshot, false);
+                update_option($this->file_monitor_hash_option, $current_hash, false);
+            }
+        }
+
+        private function collect_core_file_snapshot() {
+            $root_path = wp_normalize_path(trailingslashit(ABSPATH));
+            $excluded_path = wp_normalize_path($root_path . 'wp-content' . DIRECTORY_SEPARATOR);
+            $snapshot = [];
+
+            try {
+                $iterator = new RecursiveIteratorIterator(
+                    new RecursiveDirectoryIterator($root_path, FilesystemIterator::SKIP_DOTS),
+                    RecursiveIteratorIterator::SELF_FIRST
+                );
+            } catch (Exception $e) {
+                return '';
+            }
+
+            foreach ($iterator as $item) {
+                $pathname = wp_normalize_path($item->getPathname());
+                if (strpos($pathname, $excluded_path) === 0) {
+                    continue;
+                }
+
+                $relative = str_replace($root_path, '', $pathname);
+                if ($relative === '') {
+                    continue;
+                }
+
+                if ($item->isDir()) {
+                    $snapshot['dir:' . rtrim($relative, '/')] = (string) $item->getMTime();
+                } elseif ($item->isFile()) {
+                    $snapshot['file:' . $relative] = $item->getMTime() . '|' . $item->getSize();
+                }
+            }
+
+            ksort($snapshot);
+            return $snapshot;
+        }
+
+        private function hash_snapshot($snapshot) {
+            if (!is_array($snapshot)) {
+                return '';
+            }
+
+            ksort($snapshot);
+            return hash('sha256', wp_json_encode($snapshot));
+        }
+
+        private function detect_core_snapshot_changes($old_snapshot, $new_snapshot) {
+            $changes = [];
+
+            foreach ($new_snapshot as $path => $meta) {
+                if (!isset($old_snapshot[$path])) {
+                    $changes[] = ['type' => 'added', 'path' => $path];
+                    continue;
+                }
+
+                if ((string) $old_snapshot[$path] !== (string) $meta) {
+                    $changes[] = ['type' => 'modified', 'path' => $path];
+                }
+            }
+
+            foreach ($old_snapshot as $path => $meta) {
+                if (!isset($new_snapshot[$path])) {
+                    $changes[] = ['type' => 'deleted', 'path' => $path];
+                }
+            }
+
+            return $changes;
+        }
+
+        private function append_core_file_attack_logs($changes) {
+            if (empty($changes) || !is_array($changes)) {
+                return 0;
+            }
+
+            $existing_logs = get_option($this->file_monitor_log_option, []);
+            if (!is_array($existing_logs)) {
+                $existing_logs = [];
+            }
+
+            $time_for_display = current_time('Y-m-d H:i:s');
+            $day_for_display = current_time('l');
+            $new_rows = [];
+
+            foreach ($changes as $change) {
+                if (empty($change['path'])) {
+                    continue;
+                }
+
+                $raw_path = (string) $change['path'];
+                $change_type = isset($change['type']) ? (string) $change['type'] : '';
+
+                if ($change_type !== 'added' || strpos($raw_path, 'file:') !== 0) {
+                    continue;
+                }
+
+                $raw_path = substr($raw_path, 5);
+
+                $new_rows[] = [
+                    'id' => wp_generate_uuid4(),
+                    'type' => 'uploaded file',
+                    'path' => wp_normalize_path(trailingslashit(ABSPATH) . ltrim($raw_path, '/')),
+                    'day' => $day_for_display,
+                    'datetime' => $time_for_display,
+                    'resolved' => 0,
+                ];
+            }
+
+            if (!empty($new_rows)) {
+                $updated_logs = array_merge($new_rows, $existing_logs);
+                $updated_logs = array_slice($updated_logs, 0, 300);
+                update_option($this->file_monitor_log_option, $updated_logs, false);
+            }
+
+            return count($new_rows);
         }
 
         public function intercept_login_requests() {
@@ -1232,11 +1610,6 @@ if (!class_exists('SpeedX_Security_Patch')) {
             <?php
         }
 
-        private function get_country_list() {
-            return [
-                'AF' => 'Afghanistan','AL' => 'Albania','DZ' => 'Algeria','AD' => 'Andorra','AO' => 'Angola','AG' => 'Antigua and Barbuda','AR' => 'Argentina','AM' => 'Armenia','AU' => 'Australia','AT' => 'Austria','AZ' => 'Azerbaijan','BS' => 'Bahamas','BH' => 'Bahrain','BD' => 'Bangladesh','BB' => 'Barbados','BY' => 'Belarus','BE' => 'Belgium','BZ' => 'Belize','BJ' => 'Benin','BT' => 'Bhutan','BO' => 'Bolivia','BA' => 'Bosnia and Herzegovina','BW' => 'Botswana','BR' => 'Brazil','BN' => 'Brunei','BG' => 'Bulgaria','BF' => 'Burkina Faso','BI' => 'Burundi','CV' => 'Cabo Verde','KH' => 'Cambodia','CM' => 'Cameroon','CA' => 'Canada','CF' => 'Central African Republic','TD' => 'Chad','CL' => 'Chile','CN' => 'China','CO' => 'Colombia','KM' => 'Comoros','CG' => 'Congo','CD' => 'Congo (DRC)','CR' => 'Costa Rica','CI' => 'Côte d’Ivoire','HR' => 'Croatia','CU' => 'Cuba','CY' => 'Cyprus','CZ' => 'Czechia','DK' => 'Denmark','DJ' => 'Djibouti','DM' => 'Dominica','DO' => 'Dominican Republic','EC' => 'Ecuador','EG' => 'Egypt','SV' => 'El Salvador','GQ' => 'Equatorial Guinea','ER' => 'Eritrea','EE' => 'Estonia','SZ' => 'Eswatini','ET' => 'Ethiopia','FJ' => 'Fiji','FI' => 'Finland','FR' => 'France','GA' => 'Gabon','GM' => 'Gambia','GE' => 'Georgia','DE' => 'Germany','GH' => 'Ghana','GR' => 'Greece','GD' => 'Grenada','GT' => 'Guatemala','GN' => 'Guinea','GW' => 'Guinea-Bissau','GY' => 'Guyana','HT' => 'Haiti','HN' => 'Honduras','HU' => 'Hungary','IS' => 'Iceland','IN' => 'India','ID' => 'Indonesia','IR' => 'Iran','IQ' => 'Iraq','IE' => 'Ireland','IL' => 'Israel','IT' => 'Italy','JM' => 'Jamaica','JP' => 'Japan','JO' => 'Jordan','KZ' => 'Kazakhstan','KE' => 'Kenya','KI' => 'Kiribati','KP' => 'Korea (North)','KR' => 'Korea (South)','KW' => 'Kuwait','KG' => 'Kyrgyzstan','LA' => 'Laos','LV' => 'Latvia','LB' => 'Lebanon','LS' => 'Lesotho','LR' => 'Liberia','LY' => 'Libya','LI' => 'Liechtenstein','LT' => 'Lithuania','LU' => 'Luxembourg','MG' => 'Madagascar','MW' => 'Malawi','MY' => 'Malaysia','MV' => 'Maldives','ML' => 'Mali','MT' => 'Malta','MH' => 'Marshall Islands','MR' => 'Mauritania','MU' => 'Mauritius','MX' => 'Mexico','FM' => 'Micronesia','MD' => 'Moldova','MC' => 'Monaco','MN' => 'Mongolia','ME' => 'Montenegro','MA' => 'Morocco','MZ' => 'Mozambique','MM' => 'Myanmar','NA' => 'Namibia','NR' => 'Nauru','NP' => 'Nepal','NL' => 'Netherlands','NZ' => 'New Zealand','NI' => 'Nicaragua','NE' => 'Niger','NG' => 'Nigeria','MK' => 'North Macedonia','NO' => 'Norway','OM' => 'Oman','PK' => 'Pakistan','PW' => 'Palau','PA' => 'Panama','PG' => 'Papua New Guinea','PY' => 'Paraguay','PE' => 'Peru','PH' => 'Philippines','PL' => 'Poland','PT' => 'Portugal','QA' => 'Qatar','RO' => 'Romania','RU' => 'Russia','RW' => 'Rwanda','KN' => 'Saint Kitts and Nevis','LC' => 'Saint Lucia','VC' => 'Saint Vincent and the Grenadines','WS' => 'Samoa','SM' => 'San Marino','ST' => 'Sao Tome and Principe','SA' => 'Saudi Arabia','SN' => 'Senegal','RS' => 'Serbia','SC' => 'Seychelles','SL' => 'Sierra Leone','SG' => 'Singapore','SK' => 'Slovakia','SI' => 'Slovenia','SB' => 'Solomon Islands','SO' => 'Somalia','ZA' => 'South Africa','SS' => 'South Sudan','ES' => 'Spain','LK' => 'Sri Lanka','SD' => 'Sudan','SR' => 'Suriname','SE' => 'Sweden','CH' => 'Switzerland','SY' => 'Syria','TW' => 'Taiwan','TJ' => 'Tajikistan','TZ' => 'Tanzania','TH' => 'Thailand','TL' => 'Timor-Leste','TG' => 'Togo','TO' => 'Tonga','TT' => 'Trinidad and Tobago','TN' => 'Tunisia','TR' => 'Turkey','TM' => 'Turkmenistan','TV' => 'Tuvalu','UG' => 'Uganda','UA' => 'Ukraine','AE' => 'United Arab Emirates','GB' => 'United Kingdom','US' => 'United States','UY' => 'Uruguay','UZ' => 'Uzbekistan','VU' => 'Vanuatu','VA' => 'Vatican City','VE' => 'Venezuela','VN' => 'Vietnam','YE' => 'Yemen','ZM' => 'Zambia','ZW' => 'Zimbabwe',
-            ];
-        }
     }
 
     new SpeedX_Security_Patch();

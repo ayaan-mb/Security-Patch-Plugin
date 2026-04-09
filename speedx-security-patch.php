@@ -67,6 +67,8 @@ if (!class_exists('SpeedX_Security_Patch')) {
             if (!get_option($this->option_name)) {
                 add_option($this->option_name, $defaults);
             }
+
+            $this->cleanup_legacy_country_blocking_data();
         }
 
         public function deactivate() {
@@ -104,6 +106,20 @@ if (!class_exists('SpeedX_Security_Patch')) {
             $settings = wp_parse_args($settings, $defaults);
 
             return $settings;
+        }
+
+        public function cleanup_legacy_country_blocking_data() {
+            if (get_option($this->legacy_country_cleanup_option)) {
+                return;
+            }
+
+            $settings = get_option($this->option_name, []);
+            if (is_array($settings) && isset($settings['blocked_countries'])) {
+                unset($settings['blocked_countries']);
+                update_option($this->option_name, $settings, false);
+            }
+
+            update_option($this->legacy_country_cleanup_option, 1, false);
         }
 
         public function admin_menu() {
@@ -979,6 +995,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 } elseif ($item->isFile()) {
                     @chmod($pathname, 0444);
                 }
+                update_option($this->file_monitor_log_option, $logs, false);
             }
 
             update_option($this->readonly_permissions_option, $permission_map, false);

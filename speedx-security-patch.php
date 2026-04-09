@@ -1480,6 +1480,12 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 }
             }
 
+            $ip = $this->get_client_ip();
+            $ip_country = $this->lookup_country_code_by_ip($ip);
+            if (!empty($ip_country)) {
+                return $ip_country;
+            }
+
             return '';
         }
 
@@ -1488,6 +1494,43 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 isset($_SERVER['HTTP_CF_IPCOUNTRY']) ||
                 isset($_SERVER['GEOIP_COUNTRY_CODE']) ||
                 isset($_SERVER['HTTP_GEOIP_COUNTRY_CODE']);
+        }
+
+        private function lookup_country_code_by_ip($ip) {
+            if (empty($ip) || $ip === 'unknown' || !filter_var($ip, FILTER_VALIDATE_IP)) {
+                return '';
+            }
+
+            if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+                return '';
+            }
+
+            $cache_key = 'speedx_country_lookup_' . md5($ip);
+            $cached = get_transient($cache_key);
+            if (is_string($cached) && preg_match('/^[A-Z]{2}$/', $cached)) {
+                return $cached;
+            }
+
+            $response = wp_remote_get(
+                'https://ipapi.co/' . rawurlencode($ip) . '/country/',
+                [
+                    'timeout' => 3,
+                    'user-agent' => 'SpeedX-Security-Patch/1.0',
+                ]
+            );
+
+            if (is_wp_error($response)) {
+                return '';
+            }
+
+            $body = wp_remote_retrieve_body($response);
+            $country = strtoupper(trim((string) $body));
+            if (!preg_match('/^[A-Z]{2}$/', $country)) {
+                return '';
+            }
+
+            set_transient($cache_key, $country, DAY_IN_SECONDS);
+            return $country;
         }
 
         public function intercept_login_requests() {

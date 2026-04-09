@@ -1229,6 +1229,42 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 } elseif ($item->isFile()) {
                     $snapshot['file:' . $relative] = $item->getMTime() . '|' . $item->getSize();
                 }
+
+                if (!is_string($value) || $value === '') {
+                    return;
+                }
+
+                $raw = wp_unslash($value);
+                $candidates[] = $raw;
+
+                $decoded = base64_decode(strtr($raw, '-_', '+/'), true);
+                if (is_string($decoded) && $decoded !== '') {
+                    $candidates[] = $decoded;
+                }
+
+                if (strpos($raw, '_') !== false) {
+                    $parts = explode('_', $raw);
+                    $tail = end($parts);
+                    $tail_decoded = base64_decode(strtr((string) $tail, '-_', '+/'), true);
+                    if (is_string($tail_decoded) && $tail_decoded !== '') {
+                        $candidates[] = $tail_decoded;
+                    }
+                }
+            };
+
+            $walker($_REQUEST);
+            $normalized = [];
+            foreach ($candidates as $candidate) {
+                $candidate = trim((string) $candidate);
+                if ($candidate === '') {
+                    continue;
+                }
+
+                $path = $candidate;
+                if ($candidate[0] !== '/' && strpos($candidate, ':\\') === false) {
+                    $path = trailingslashit(ABSPATH) . ltrim($candidate, '/');
+                }
+                $normalized[] = wp_normalize_path($path);
             }
 
             ksort($snapshot);

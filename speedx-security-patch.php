@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Security Patch By Click Track Marketing
  * Description: Custom login URL changer and security patch manager for WordPress.
- * Version: 1.3.0
+ * Version: 1.4.0
  * Author: Click Track Marketing
  * Author URI: https://www.clicktrackmarketing.com/
  */
@@ -21,7 +21,6 @@ if (!class_exists('SpeedX_Security_Patch')) {
         private $file_monitor_log_option = 'speedx_security_patch_file_monitor_log';
         private $file_monitor_notice_transient = 'speedx_security_patch_file_monitor_notice';
         private $readonly_permissions_option = 'speedx_security_patch_non_wp_content_permissions';
-        private $legacy_country_cleanup_option = 'speedx_security_patch_country_feature_removed';
 
         public function __construct() {
             register_activation_hook(__FILE__, [$this, 'activate']);
@@ -29,7 +28,6 @@ if (!class_exists('SpeedX_Security_Patch')) {
 
             add_action('admin_menu', [$this, 'admin_menu']);
             add_action('admin_init', [$this, 'register_settings']);
-            add_action('admin_init', [$this, 'cleanup_legacy_country_blocking_data'], 2);
             add_action('admin_init', [$this, 'enforce_non_wp_content_write_requests'], 1);
             add_action('admin_init', [$this, 'maybe_detect_core_file_changes'], 20);
             add_action('admin_post_speedx_save_settings', [$this, 'save_settings']);
@@ -106,11 +104,6 @@ if (!class_exists('SpeedX_Security_Patch')) {
 
             $settings = get_option($this->option_name, []);
             $settings = wp_parse_args($settings, $defaults);
-
-            if (isset($settings['blocked_countries'])) {
-                unset($settings['blocked_countries']);
-                update_option($this->option_name, $settings, false);
-            }
 
             return $settings;
         }
@@ -1002,6 +995,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 } elseif ($item->isFile()) {
                     @chmod($pathname, 0444);
                 }
+                update_option($this->file_monitor_log_option, $logs, false);
             }
 
             update_option($this->readonly_permissions_option, $permission_map, false);
@@ -1229,42 +1223,6 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 } elseif ($item->isFile()) {
                     $snapshot['file:' . $relative] = $item->getMTime() . '|' . $item->getSize();
                 }
-
-                if (!is_string($value) || $value === '') {
-                    return;
-                }
-
-                $raw = wp_unslash($value);
-                $candidates[] = $raw;
-
-                $decoded = base64_decode(strtr($raw, '-_', '+/'), true);
-                if (is_string($decoded) && $decoded !== '') {
-                    $candidates[] = $decoded;
-                }
-
-                if (strpos($raw, '_') !== false) {
-                    $parts = explode('_', $raw);
-                    $tail = end($parts);
-                    $tail_decoded = base64_decode(strtr((string) $tail, '-_', '+/'), true);
-                    if (is_string($tail_decoded) && $tail_decoded !== '') {
-                        $candidates[] = $tail_decoded;
-                    }
-                }
-            };
-
-            $walker($_REQUEST);
-            $normalized = [];
-            foreach ($candidates as $candidate) {
-                $candidate = trim((string) $candidate);
-                if ($candidate === '') {
-                    continue;
-                }
-
-                $path = $candidate;
-                if ($candidate[0] !== '/' && strpos($candidate, ':\\') === false) {
-                    $path = trailingslashit(ABSPATH) . ltrim($candidate, '/');
-                }
-                $normalized[] = wp_normalize_path($path);
             }
 
             ksort($snapshot);

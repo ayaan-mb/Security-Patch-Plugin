@@ -68,7 +68,6 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 add_option($this->option_name, $defaults);
             }
 
-            $this->cleanup_legacy_country_blocking_data();
         }
 
         public function deactivate() {
@@ -106,44 +105,6 @@ if (!class_exists('SpeedX_Security_Patch')) {
             $settings = wp_parse_args($settings, $defaults);
 
             return $settings;
-        }
-
-        private function cleanup_legacy_country_blocking_data() {
-            $settings = get_option($this->option_name, []);
-            if (is_array($settings)) {
-                $legacy_keys = [
-                    'country_blocking_enabled',
-                    'country_block_enabled',
-                    'blocked_countries',
-                    'country_blocklist',
-                    'country_allowlist',
-                    'allowed_countries',
-                    'country_search',
-                ];
-
-                $has_changes = false;
-                foreach ($legacy_keys as $legacy_key) {
-                    if (array_key_exists($legacy_key, $settings)) {
-                        unset($settings[$legacy_key]);
-                        $has_changes = true;
-                    }
-                }
-
-                if ($has_changes) {
-                    update_option($this->option_name, $settings);
-                }
-            }
-
-            $legacy_options = [
-                'speedx_security_patch_country_blocking',
-                'speedx_security_patch_blocked_countries',
-                'speedx_country_blocking',
-                'speedx_blocked_countries',
-            ];
-
-            foreach ($legacy_options as $legacy_option) {
-                delete_option($legacy_option);
-            }
         }
 
         public function admin_menu() {
@@ -864,8 +825,6 @@ if (!class_exists('SpeedX_Security_Patch')) {
             ];
 
             update_option($this->option_name, $new_settings);
-            $this->cleanup_legacy_country_blocking_data();
-
             if (!empty($new_settings['protect_wp_config_htaccess'])) {
                 $this->add_htaccess_rule();
             } else {

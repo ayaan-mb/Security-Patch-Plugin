@@ -23,8 +23,9 @@ if (!class_exists('SpeedX_Security_Patch')) {
         private $readonly_permissions_option = 'speedx_security_patch_non_wp_content_permissions';
 
         public function __construct() {
-            register_activation_hook(__FILE__, [$this, 'activate']);
-            register_deactivation_hook(__FILE__, [$this, 'deactivate']);
+            $plugin_file = defined('SPEEDX_SECURITY_PATCH_MAIN_FILE') ? SPEEDX_SECURITY_PATCH_MAIN_FILE : __FILE__;
+            register_activation_hook($plugin_file, [$this, 'activate']);
+            register_deactivation_hook($plugin_file, [$this, 'deactivate']);
 
             add_action('admin_menu', [$this, 'admin_menu']);
             add_action('admin_init', [$this, 'register_settings']);
@@ -68,6 +69,8 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 add_option($this->option_name, $defaults);
             }
 
+            $this->remove_country_blocking_settings();
+
         }
 
         public function deactivate() {
@@ -84,6 +87,8 @@ if (!class_exists('SpeedX_Security_Patch')) {
             if (!empty($settings['lock_non_wp_content_writes'])) {
                 $this->remove_non_wp_content_lock();
             }
+
+            $this->remove_country_blocking_settings();
 
             delete_transient($this->file_monitor_notice_transient);
             delete_transient('speedx_security_patch_file_monitor_scan_lock');
@@ -825,6 +830,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
             ];
 
             update_option($this->option_name, $new_settings);
+            $this->remove_country_blocking_settings();
             if (!empty($new_settings['protect_wp_config_htaccess'])) {
                 $this->add_htaccess_rule();
             } else {
@@ -874,6 +880,40 @@ if (!class_exists('SpeedX_Security_Patch')) {
 
             wp_safe_redirect($redirect_url);
             exit;
+        }
+
+        /**
+         * Permanently remove legacy country-blocking settings/options.
+         */
+        private function remove_country_blocking_settings() {
+            $settings = get_option($this->option_name, []);
+            if (!is_array($settings)) {
+                $settings = [];
+            }
+
+            $country_blocking_keys = [
+                'country_blocking_enabled',
+                'blocked_countries',
+                'allowed_countries',
+                'country_blocking_mode',
+            ];
+
+            $updated = false;
+            foreach ($country_blocking_keys as $key) {
+                if (array_key_exists($key, $settings)) {
+                    unset($settings[$key]);
+                    $updated = true;
+                }
+            }
+
+            if ($updated) {
+                update_option($this->option_name, $settings);
+            }
+
+            delete_option('speedx_security_patch_country_blocking_enabled');
+            delete_option('speedx_security_patch_blocked_countries');
+            delete_option('speedx_security_patch_allowed_countries');
+            delete_option('speedx_security_patch_country_blocking_mode');
         }
 
         public function admin_notices() {
@@ -1030,36 +1070,6 @@ if (!class_exists('SpeedX_Security_Patch')) {
             if (empty($paths) && $this->is_known_file_manager_write_action($action)) {
                 wp_die('Blocked by Security Patch: Editing/uploading outside wp-content is disabled.', 403);
             }
-
-            $paths = $this->extract_request_paths_for_lock_check();
-            foreach ($paths as $path) {
-                if ($this->is_non_wp_content_path($path)) {
-                    wp_die('Blocked by Security Patch: Editing/uploading outside wp-content is disabled.', 403);
-                }
-            }
-
-            if (empty($paths) && $this->is_known_file_manager_write_action($action)) {
-                wp_die('Blocked by Security Patch: Editing/uploading outside wp-content is disabled.', 403);
-            }
-        }
-
-        private function is_probable_write_request() {
-            $write_cmds = ['upload', 'put', 'rename', 'rm', 'mkdir', 'mkfile', 'paste', 'duplicate', 'archive', 'extract', 'chmod', 'save'];
-            $write_action_hints = ['upload', 'save', 'edit', 'delete', 'remove', 'rename', 'mkdir', 'mkfile', 'paste', 'extract', 'archive', 'chmod'];
-
-            $cmd = isset($_REQUEST['cmd']) ? strtolower(sanitize_text_field(wp_unslash($_REQUEST['cmd']))) : '';
-            if (in_array($cmd, $write_cmds, true)) {
-                return true;
-            }
-
-            $action = isset($_REQUEST['action']) ? strtolower(sanitize_text_field(wp_unslash($_REQUEST['action']))) : '';
-            foreach ($write_action_hints as $hint) {
-                if ($action !== '' && strpos($action, $hint) !== false) {
-                    return true;
-                }
-            }
-
-            return false;
         }
 
         private function is_probable_write_request() {
@@ -1151,109 +1161,6 @@ if (!class_exists('SpeedX_Security_Patch')) {
                     if (is_string($tail_decoded) && $tail_decoded !== '') {
                         $candidates[] = $tail_decoded;
                     }
-                }
-            };
-
-            $walker($_REQUEST);
-            $normalized = [];
-            foreach ($candidates as $candidate) {
-                $candidate = trim((string) $candidate);
-                if ($candidate === '') {
-                    continue;
-                }
-
-                $path = $candidate;
-                if ($candidate[0] !== '/' && strpos($candidate, ':\\') === false) {
-                    $path = trailingslashit(ABSPATH) . ltrim($candidate, '/');
-                }
-                $normalized[] = wp_normalize_path($path);
-            }
-
-            return array_values(array_unique($normalized));
-        }
-
-        private function is_non_wp_content_path($path) {
-            $path = wp_normalize_path((string) $path);
-            $root = wp_normalize_path(trailingslashit(ABSPATH));
-            $allowed = wp_normalize_path($root . 'wp-content' . DIRECTORY_SEPARATOR);
-
-            if (strpos($path, $root) !== 0) {
-                return false;
-            }
-
-            return strpos($path, $allowed) !== 0;
-        }
-
-        public function maybe_detect_core_file_changes() {
-            if (!is_admin() || !current_user_can('manage_options')) {
-                return;
-            }
-
-            $settings = $this->get_settings();
-            if (empty($settings['core_file_change_alert'])) {
-                return;
-            }
-
-            $current_snapshot = $this->collect_core_file_snapshot();
-            if (empty($current_snapshot)) {
-                return;
-            }
-
-            $stored_snapshot = get_option($this->file_monitor_snapshot_option, []);
-            if (!is_array($stored_snapshot) || empty($stored_snapshot)) {
-                update_option($this->file_monitor_snapshot_option, $current_snapshot, false);
-                update_option($this->file_monitor_hash_option, $this->hash_snapshot($current_snapshot), false);
-                return;
-            }
-
-            $current_hash = $this->hash_snapshot($current_snapshot);
-            $stored_hash = (string) get_option($this->file_monitor_hash_option, '');
-
-            if (empty($stored_hash) || !hash_equals($stored_hash, $current_hash)) {
-                $changes = $this->detect_core_snapshot_changes($stored_snapshot, $current_snapshot);
-                $new_count = $this->append_core_file_attack_logs($changes);
-                if ($new_count > 0) {
-                    $timestamp = current_time('mysql');
-                    set_transient(
-                        $this->file_monitor_notice_transient,
-                        $new_count . ' uploaded file(s) detected outside wp-content on ' . $timestamp . '. Check the Malicious Attack Alerts section.',
-                        DAY_IN_SECONDS
-                    );
-                }
-                update_option($this->file_monitor_snapshot_option, $current_snapshot, false);
-                update_option($this->file_monitor_hash_option, $current_hash, false);
-            }
-        }
-
-        private function collect_core_file_snapshot() {
-            $root_path = wp_normalize_path(trailingslashit(ABSPATH));
-            $excluded_path = wp_normalize_path($root_path . 'wp-content' . DIRECTORY_SEPARATOR);
-            $snapshot = [];
-
-            try {
-                $iterator = new RecursiveIteratorIterator(
-                    new RecursiveDirectoryIterator($root_path, FilesystemIterator::SKIP_DOTS),
-                    RecursiveIteratorIterator::SELF_FIRST
-                );
-            } catch (Exception $e) {
-                return '';
-            }
-
-            foreach ($iterator as $item) {
-                $pathname = wp_normalize_path($item->getPathname());
-                if (strpos($pathname, $excluded_path) === 0) {
-                    continue;
-                }
-
-                $relative = str_replace($root_path, '', $pathname);
-                if ($relative === '') {
-                    continue;
-                }
-
-                if ($item->isDir()) {
-                    $snapshot['dir:' . rtrim($relative, '/')] = (string) $item->getMTime();
-                } elseif ($item->isFile()) {
-                    $snapshot['file:' . $relative] = $item->getMTime() . '|' . $item->getSize();
                 }
             };
 

@@ -68,6 +68,8 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 add_option($this->option_name, $defaults);
             }
 
+            $this->remove_country_blocking_settings();
+
         }
 
         public function deactivate() {
@@ -84,6 +86,8 @@ if (!class_exists('SpeedX_Security_Patch')) {
             if (!empty($settings['lock_non_wp_content_writes'])) {
                 $this->remove_non_wp_content_lock();
             }
+
+            $this->remove_country_blocking_settings();
 
             delete_transient($this->file_monitor_notice_transient);
             delete_transient('speedx_security_patch_file_monitor_scan_lock');
@@ -825,6 +829,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
             ];
 
             update_option($this->option_name, $new_settings);
+            $this->remove_country_blocking_settings();
             if (!empty($new_settings['protect_wp_config_htaccess'])) {
                 $this->add_htaccess_rule();
             } else {
@@ -874,6 +879,40 @@ if (!class_exists('SpeedX_Security_Patch')) {
 
             wp_safe_redirect($redirect_url);
             exit;
+        }
+
+        /**
+         * Permanently remove legacy country-blocking settings/options.
+         */
+        private function remove_country_blocking_settings() {
+            $settings = get_option($this->option_name, []);
+            if (!is_array($settings)) {
+                $settings = [];
+            }
+
+            $country_blocking_keys = [
+                'country_blocking_enabled',
+                'blocked_countries',
+                'allowed_countries',
+                'country_blocking_mode',
+            ];
+
+            $updated = false;
+            foreach ($country_blocking_keys as $key) {
+                if (array_key_exists($key, $settings)) {
+                    unset($settings[$key]);
+                    $updated = true;
+                }
+            }
+
+            if ($updated) {
+                update_option($this->option_name, $settings);
+            }
+
+            delete_option('speedx_security_patch_country_blocking_enabled');
+            delete_option('speedx_security_patch_blocked_countries');
+            delete_option('speedx_security_patch_allowed_countries');
+            delete_option('speedx_security_patch_country_blocking_mode');
         }
 
         public function admin_notices() {

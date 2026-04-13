@@ -23,8 +23,9 @@ if (!class_exists('SpeedX_Security_Patch')) {
         private $readonly_permissions_option = 'speedx_security_patch_non_wp_content_permissions';
 
         public function __construct() {
-            register_activation_hook(__FILE__, [$this, 'activate']);
-            register_deactivation_hook(__FILE__, [$this, 'deactivate']);
+            $plugin_file = defined('SPEEDX_SECURITY_PATCH_MAIN_FILE') ? SPEEDX_SECURITY_PATCH_MAIN_FILE : __FILE__;
+            register_activation_hook($plugin_file, [$this, 'activate']);
+            register_deactivation_hook($plugin_file, [$this, 'deactivate']);
 
             add_action('admin_menu', [$this, 'admin_menu']);
             add_action('admin_init', [$this, 'register_settings']);

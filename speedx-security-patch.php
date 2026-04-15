@@ -1036,7 +1036,8 @@ if (!class_exists('SpeedX_Security_Patch')) {
             try {
                 $iterator = new RecursiveIteratorIterator(
                     new RecursiveDirectoryIterator($root_path, FilesystemIterator::SKIP_DOTS),
-                    RecursiveIteratorIterator::SELF_FIRST
+                    RecursiveIteratorIterator::SELF_FIRST,
+                    RecursiveIteratorIterator::CATCH_GET_CHILD
                 );
             } catch (Exception $e) {
                 return;
@@ -1058,12 +1059,15 @@ if (!class_exists('SpeedX_Security_Patch')) {
                     $permission_map[$pathname] = substr(sprintf('%o', $current_perms), -4);
                 }
 
+                if (is_link($pathname)) {
+                    continue;
+                }
+
                 if ($item->isDir()) {
                     @chmod($pathname, 0555);
                 } elseif ($item->isFile()) {
                     @chmod($pathname, 0444);
                 }
-                update_option($this->file_monitor_log_option, $logs, false);
             }
 
             update_option($this->readonly_permissions_option, $permission_map, false);
@@ -1291,7 +1295,8 @@ if (!class_exists('SpeedX_Security_Patch')) {
             try {
                 $iterator = new RecursiveIteratorIterator(
                     new RecursiveDirectoryIterator($root_path, FilesystemIterator::SKIP_DOTS),
-                    RecursiveIteratorIterator::SELF_FIRST
+                    RecursiveIteratorIterator::SELF_FIRST,
+                    RecursiveIteratorIterator::CATCH_GET_CHILD
                 );
             } catch (Exception $e) {
                 return '';
@@ -1308,10 +1313,23 @@ if (!class_exists('SpeedX_Security_Patch')) {
                     continue;
                 }
 
+                if (is_link($pathname)) {
+                    continue;
+                }
+
                 if ($item->isDir()) {
-                    $snapshot['dir:' . rtrim($relative, '/')] = (string) $item->getMTime();
+                    $mtime = @filemtime($pathname);
+                    if ($mtime === false) {
+                        continue;
+                    }
+                    $snapshot['dir:' . rtrim($relative, '/')] = (string) $mtime;
                 } elseif ($item->isFile()) {
-                    $snapshot['file:' . $relative] = $item->getMTime() . '|' . $item->getSize();
+                    $mtime = @filemtime($pathname);
+                    $size = @filesize($pathname);
+                    if ($mtime === false || $size === false) {
+                        continue;
+                    }
+                    $snapshot['file:' . $relative] = $mtime . '|' . $size;
                 }
             }
 

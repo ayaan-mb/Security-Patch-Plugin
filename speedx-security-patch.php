@@ -338,21 +338,21 @@ if (!class_exists('SpeedX_Security_Patch')) {
                                         <table class="ctm-attack-table">
                                             <thead>
                                                 <tr>
-                                                    <th>Type</th>
-                                                    <th>Full Path</th>
-                                                    <th>Day</th>
-                                                    <th>Date &amp; Time</th>
-                                                    <th>Resolve</th>
+                                                    <th class="ctm-col-type">Type</th>
+                                                    <th class="ctm-col-path">Full Path</th>
+                                                    <th class="ctm-col-day">Day</th>
+                                                    <th class="ctm-col-datetime">Date &amp; Time</th>
+                                                    <th class="ctm-col-resolve">Resolve</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
                                                 <?php foreach (array_slice($uploaded_file_logs, 0, 25, true) as $log_key => $log_item) : ?>
                                                     <tr>
-                                                        <td><?php echo esc_html(isset($log_item['type']) ? ucwords($log_item['type']) : 'Unknown'); ?></td>
-                                                        <td><code><?php echo esc_html(isset($log_item['path']) ? $log_item['path'] : ''); ?></code></td>
-                                                        <td><?php echo esc_html(isset($log_item['day']) ? $log_item['day'] : ''); ?></td>
-                                                        <td><?php echo esc_html(isset($log_item['datetime']) ? $log_item['datetime'] : ''); ?></td>
-                                                        <td>
+                                                        <td class="ctm-col-type"><?php echo esc_html(isset($log_item['type']) ? ucwords($log_item['type']) : 'Unknown'); ?></td>
+                                                        <td class="ctm-col-path"><code><?php echo esc_html(isset($log_item['path']) ? $log_item['path'] : ''); ?></code></td>
+                                                        <td class="ctm-col-day"><?php echo esc_html(isset($log_item['day']) ? $log_item['day'] : ''); ?></td>
+                                                        <td class="ctm-col-datetime"><?php echo esc_html(isset($log_item['datetime']) ? $log_item['datetime'] : ''); ?></td>
+                                                        <td class="ctm-col-resolve">
                                                             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
                                                                 <?php wp_nonce_field('speedx_mark_attack_resolved_action', 'speedx_resolve_nonce'); ?>
                                                                 <input type="hidden" name="action" value="speedx_mark_attack_resolved">
@@ -616,7 +616,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 .ctm-attack-table{
                     width:100%;
                     border-collapse:collapse;
-                    min-width:700px;
+                    table-layout:fixed;
                     background:rgba(5,14,27,.92);
                 }
                 .ctm-attack-table th,
@@ -642,7 +642,14 @@ if (!class_exists('SpeedX_Security_Patch')) {
                     color:#9fe2ff;
                     background:transparent;
                     padding:0;
+                    white-space:normal;
+                    word-break:break-all;
                 }
+                .ctm-col-type{width:10%;}
+                .ctm-col-path{width:56%;}
+                .ctm-col-day{width:10%;}
+                .ctm-col-datetime{width:16%;}
+                .ctm-col-resolve{width:8%; text-align:center;}
                 .ctm-resolve-btn{
                     min-width:34px;
                     height:30px;
@@ -1381,6 +1388,14 @@ if (!class_exists('SpeedX_Security_Patch')) {
             $time_for_display = current_time('Y-m-d H:i:s');
             $day_for_display = current_time('l');
             $new_rows = [];
+            $seen_paths = [];
+
+            foreach ($existing_logs as $existing_log) {
+                if (empty($existing_log['path']) || !empty($existing_log['resolved'])) {
+                    continue;
+                }
+                $seen_paths[(string) $existing_log['path']] = true;
+            }
 
             foreach ($changes as $change) {
                 if (empty($change['path'])) {
@@ -1395,11 +1410,20 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 }
 
                 $raw_path = substr($raw_path, 5);
+                if (!$this->should_log_uploaded_file_alert($raw_path)) {
+                    continue;
+                }
+
+                $normalized_path = wp_normalize_path(trailingslashit(ABSPATH) . ltrim($raw_path, '/'));
+                if (isset($seen_paths[$normalized_path])) {
+                    continue;
+                }
+                $seen_paths[$normalized_path] = true;
 
                 $new_rows[] = [
                     'id' => wp_generate_uuid4(),
                     'type' => 'uploaded file',
-                    'path' => wp_normalize_path(trailingslashit(ABSPATH) . ltrim($raw_path, '/')),
+                    'path' => $normalized_path,
                     'day' => $day_for_display,
                     'datetime' => $time_for_display,
                     'resolved' => 0,
@@ -1413,6 +1437,29 @@ if (!class_exists('SpeedX_Security_Patch')) {
             }
 
             return count($new_rows);
+        }
+
+        private function should_log_uploaded_file_alert($relative_path) {
+            $path = wp_normalize_path((string) $relative_path);
+
+            if ($path === '') {
+                return false;
+            }
+
+            $ignored_fragments = [
+                '/.tmb/',
+                '/.cache/',
+                '/cache/',
+                '/tmp/',
+            ];
+
+            foreach ($ignored_fragments as $fragment) {
+                if (strpos($path, $fragment) !== false) {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         public function intercept_login_requests() {

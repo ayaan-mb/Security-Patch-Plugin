@@ -1088,7 +1088,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
         }
 
         public function enforce_non_wp_content_write_requests() {
-            if (!is_admin() || strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET')) !== 'POST') {
+            if (!is_admin()) {
                 return;
             }
 
@@ -1114,6 +1114,11 @@ if (!class_exists('SpeedX_Security_Patch')) {
             }
 
             if (empty($paths) && $this->is_known_file_manager_write_action($action)) {
+                wp_die('Blocked by Security Patch: Editing/uploading outside wp-content is disabled.', 403);
+            }
+
+            $cmd = isset($_REQUEST['cmd']) ? strtolower(sanitize_text_field(wp_unslash($_REQUEST['cmd']))) : '';
+            if (empty($paths) && $cmd !== '' && $this->is_probable_write_request()) {
                 wp_die('Blocked by Security Patch: Editing/uploading outside wp-content is disabled.', 403);
             }
         }

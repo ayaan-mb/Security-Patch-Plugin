@@ -233,7 +233,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
 
                 <div class="ctm-card-grid">
                     <div class="ctm-card ctm-card--main">
-                        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                        <form id="speedx-security-form" method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
                             <?php wp_nonce_field('speedx_save_settings_action', 'speedx_nonce'); ?>
                             <input type="hidden" name="action" value="speedx_save_settings">
 
@@ -369,9 +369,6 @@ if (!class_exists('SpeedX_Security_Patch')) {
                                 <?php endif; ?>
                             </div>
 
-                            <div class="ctm-submit-row">
-                                <?php submit_button('Save Security Settings', 'primary', 'submit', false); ?>
-                            </div>
                         </form>
                     </div>
 
@@ -393,6 +390,9 @@ if (!class_exists('SpeedX_Security_Patch')) {
                             <div class="ctm-mini-metric">
                                 <span>Non-wp-content Lock</span>
                                 <strong><?php echo !empty($settings['lock_non_wp_content_writes']) ? 'On' : 'Off'; ?></strong>
+                            </div>
+                            <div class="ctm-side-actions">
+                                <button type="submit" form="speedx-security-form" name="submit" class="button button-primary">Save Security Settings</button>
                             </div>
                         </div>
                     </div>
@@ -707,6 +707,16 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 }
                 .ctm-current-url:hover{
                     color:#fff;
+                }
+                .ctm-side-actions{
+                    margin-top:18px;
+                    padding-top:14px;
+                    border-top:1px solid rgba(79,192,255,.14);
+                }
+                .ctm-side-actions .button-primary{
+                    width:100%;
+                    justify-content:center;
+                    font-weight:700;
                 }
                 .ctm-toggle-card{
                     display:flex;

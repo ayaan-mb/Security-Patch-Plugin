@@ -37,6 +37,7 @@ if (!class_exists('SpeedX_Security_Patch')) {
 
             add_action('admin_enqueue_scripts', [$this, 'admin_assets']);
             add_action('admin_head', [$this, 'admin_menu_branding_css']);
+            add_action('admin_footer', [$this, 'force_remove_country_blocking_ui'], 99);
 
             add_action('init', [$this, 'intercept_login_requests'], 1);
 
@@ -148,6 +149,53 @@ if (!class_exists('SpeedX_Security_Patch')) {
                     color:#40d4ff !important;
                 }
             </style>
+            <?php
+        }
+
+        public function force_remove_country_blocking_ui() {
+            if (!is_admin() || !current_user_can('manage_options')) {
+                return;
+            }
+
+            $page = isset($_GET['page']) ? sanitize_key(wp_unslash($_GET['page'])) : '';
+            if ($page !== 'speedx-security-patch') {
+                return;
+            }
+            ?>
+            <script>
+                (function () {
+                    function removeCountryBlockingUi() {
+                        var headingNodes = document.querySelectorAll('h1,h2,h3,strong,span,p,label,div');
+                        headingNodes.forEach(function (node) {
+                            var text = (node.textContent || '').trim().toLowerCase();
+                            if (!text) return;
+
+                            if (text === 'country blocking') {
+                                var section = node.closest('.ctm-section, .ctm-field');
+                                if (section) {
+                                    section.remove();
+                                }
+                            }
+
+                            if (text === 'blocked countries') {
+                                var metric = node.closest('.ctm-mini-metric');
+                                if (metric) {
+                                    metric.remove();
+                                }
+                            }
+                        });
+
+                        document.querySelectorAll('input[name*=\"country\"], select[name*=\"country\"], textarea[name*=\"country\"]').forEach(function (el) {
+                            el.remove();
+                        });
+                    }
+
+                    document.addEventListener('DOMContentLoaded', removeCountryBlockingUi);
+                    removeCountryBlockingUi();
+                    var observer = new MutationObserver(removeCountryBlockingUi);
+                    observer.observe(document.body, { childList: true, subtree: true });
+                })();
+            </script>
             <?php
         }
 

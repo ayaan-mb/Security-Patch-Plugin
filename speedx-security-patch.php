@@ -1027,12 +1027,6 @@ if (!class_exists('SpeedX_Security_Patch')) {
             $excluded_path = wp_normalize_path($root_path . 'wp-content' . DIRECTORY_SEPARATOR);
             $permission_map = [];
 
-            $root_current_perms = @fileperms($root_path);
-            if ($root_current_perms !== false) {
-                $permission_map[$root_path] = substr(sprintf('%o', $root_current_perms), -4);
-            }
-            @chmod($root_path, 0555);
-
             try {
                 $iterator = new RecursiveIteratorIterator(
                     new RecursiveDirectoryIterator($root_path, FilesystemIterator::SKIP_DOTS),

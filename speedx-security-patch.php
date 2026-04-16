@@ -31,8 +31,10 @@ if (!class_exists('SpeedX_Security_Patch')) {
             add_action('admin_init', [$this, 'register_settings']);
             add_action('admin_init', [$this, 'enforce_non_wp_content_write_requests'], 1);
             add_action('admin_init', [$this, 'maybe_detect_core_file_changes'], 20);
+            add_action('admin_bar_menu', [$this, 'admin_bar_quick_lock_toggle'], 90);
             add_action('admin_post_speedx_save_settings', [$this, 'save_settings']);
             add_action('admin_post_speedx_mark_attack_resolved', [$this, 'mark_attack_resolved']);
+            add_action('admin_post_speedx_toggle_non_wp_content_lock', [$this, 'toggle_non_wp_content_lock_from_admin_bar']);
             add_action('admin_notices', [$this, 'admin_notices']);
 
             add_action('admin_enqueue_scripts', [$this, 'admin_assets']);
@@ -1015,6 +1017,79 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 $login_url = home_url('/' . trim($settings['custom_login_slug'], '/') . '/');
                 echo '<div class="notice notice-success is-dismissible"><p><strong>Settings saved.</strong> Login URL: <a href="' . esc_url($login_url) . '" target="_blank">' . esc_html($login_url) . '</a></p></div>';
             }
+
+            if (!empty($_GET['speedx_lock_toggled'])) {
+                $enabled = !empty($_GET['speedx_lock_state']) && $_GET['speedx_lock_state'] === 'on';
+                $message = $enabled
+                    ? 'Non-wp-content lock enabled from top bar.'
+                    : 'Non-wp-content lock disabled from top bar.';
+                echo '<div class="notice notice-success is-dismissible"><p><strong>Security Patch:</strong> ' . esc_html($message) . '</p></div>';
+            }
+        }
+
+        public function admin_bar_quick_lock_toggle($wp_admin_bar) {
+            if (!is_admin_bar_showing() || !current_user_can('manage_options')) {
+                return;
+            }
+
+            $settings = $this->get_settings();
+            $is_enabled = !empty($settings['lock_non_wp_content_writes']);
+            $next_state = $is_enabled ? 'off' : 'on';
+
+            $toggle_url = wp_nonce_url(
+                add_query_arg(
+                    [
+                        'action' => 'speedx_toggle_non_wp_content_lock',
+                        'state' => $next_state,
+                    ],
+                    admin_url('admin-post.php')
+                ),
+                'speedx_toggle_non_wp_content_lock'
+            );
+
+            $wp_admin_bar->add_node(
+                [
+                    'id' => 'speedx-quick-lock-toggle',
+                    'title' => $is_enabled ? 'Non-wp-content Lock: On' : 'Non-wp-content Lock: Off',
+                    'href' => $toggle_url,
+                    'meta' => [
+                        'title' => $is_enabled ? 'Disable non-wp-content lock' : 'Enable non-wp-content lock',
+                    ],
+                ]
+            );
+        }
+
+        public function toggle_non_wp_content_lock_from_admin_bar() {
+            if (!current_user_can('manage_options')) {
+                wp_die('Unauthorized access.');
+            }
+
+            check_admin_referer('speedx_toggle_non_wp_content_lock');
+
+            $state = isset($_GET['state']) ? sanitize_key(wp_unslash($_GET['state'])) : 'off';
+            $enable_lock = ($state === 'on');
+
+            $settings = $this->get_settings();
+            $settings['lock_non_wp_content_writes'] = $enable_lock ? 1 : 0;
+            update_option($this->option_name, $settings);
+
+            if ($enable_lock) {
+                $this->apply_non_wp_content_lock();
+            } else {
+                $this->remove_non_wp_content_lock();
+            }
+
+            $redirect_url = add_query_arg(
+                [
+                    'page' => 'speedx-security-patch',
+                    'speedx_lock_toggled' => '1',
+                    'speedx_lock_state' => $enable_lock ? 'on' : 'off',
+                ],
+                admin_url('admin.php')
+            );
+
+            wp_safe_redirect($redirect_url);
+            exit;
         }
 
         public function mark_attack_resolved() {

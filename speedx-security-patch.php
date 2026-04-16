@@ -424,6 +424,21 @@ if (!class_exists('SpeedX_Security_Patch')) {
                 }
                 .speedx-security-wrap .notice{
                     margin-left:0;
+                    background:#ffffff !important;
+                    color:#111827 !important;
+                }
+                .speedx-security-wrap .notice p,
+                .speedx-security-wrap .notice strong,
+                .speedx-security-wrap .notice h1,
+                .speedx-security-wrap .notice h2,
+                .speedx-security-wrap .notice h3,
+                .speedx-security-wrap .notice h4,
+                .speedx-security-wrap .notice li,
+                .speedx-security-wrap .notice span{
+                    color:#111827 !important;
+                }
+                .speedx-security-wrap .notice a{
+                    color:#0b63d1 !important;
                 }
                 .ctm-hero{
                     max-width:none;
